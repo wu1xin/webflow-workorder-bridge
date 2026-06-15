@@ -1,7 +1,8 @@
 using System;                           // 基础类型与工具，如 Array
 using WeflowAgent.Core;                  // 引用 Core 库里的 AppPaths、StartupStatus、AgentHealth 等
+using WeflowAgent.Core.Configuration;    // AgentConfig、ConfigStore、ConfigValidator、ConfigSaveService
 using WeflowAgent.Core.Persistence;      // SchemaMigrator、ISchemaMigration（模式迁移）
-using WeflowAgent.Core.Security;         // CredentialStore、DpapiCredentialProtector（凭据）
+using WeflowAgent.Core.Security;         // CredentialStore、DpapiCredentialProtector、CredentialSet
 
 namespace WeflowAgent.App;
 
@@ -14,7 +15,13 @@ namespace WeflowAgent.App;
 //   · 基于"值"的相等比较、ToString() 等。
 // 等价于普通类里写一大堆样板代码，但 record 一行搞定，非常适合做数据载体（DTO）。
 // `sealed` = 密封，禁止别的类再继承它（数据载体一般不需要被继承，封死更清晰安全）。
-public sealed record BootstrapResult(AppPaths Paths, int SchemaVersion, StartupStatus Status);
+public sealed record BootstrapResult(
+    AppPaths Paths,
+    int SchemaVersion,
+    StartupStatus Status,
+    AgentConfig Config,
+    CredentialSet? Credentials,
+    ConfigSaveService SaveService);
 
 /// <summary>
 /// 启动胶水：串起 %LocalAppData% 状态目录、schemaVersion 迁移、DPAPI 凭据加载，
@@ -53,11 +60,16 @@ public static class AgentBootstrapper
         // 这里把一个新建的 DpapiCredentialProtector 作为参数传给 CredentialStore，
         // 即"CredentialStore 依赖一个加解密器"——这种把依赖从外面塞进来的写法叫"依赖注入"，
         // 好处是测试时可换成假的加解密器。
-        var store = new CredentialStore(paths.SecretsFile, new DpapiCredentialProtector());
-        CredentialLoadResult load = store.Load();                       // 读取并尝试解密凭据
+        var credentialStore = new CredentialStore(paths.SecretsFile, new DpapiCredentialProtector());
+        CredentialLoadResult load = credentialStore.Load();             // 读取并尝试解密凭据
         StartupStatus status = StartupStatus.FromCredentials(load.Status); // 由凭据状态推导绿/黄/红
 
-        // 把三个结果打包进 record 返回。new BootstrapResult(...) 调用的就是 record 自动生成的构造函数。
-        return new BootstrapResult(paths, schemaVersion, status);
+        // 4) 非敏感配置：读 config.json（首次无文件返回默认配置）；组装"保存编排"服务供界面使用。
+        var configStore = new ConfigStore(paths.ConfigFile);
+        AgentConfig config = configStore.Load();
+        var saveService = new ConfigSaveService(configStore, credentialStore, new ConfigValidator());
+
+        // 打包返回。load.Credentials 仅在凭据成功解密（Loaded）时非空，用于界面回填掩码框。
+        return new BootstrapResult(paths, schemaVersion, status, config, load.Credentials, saveService);
     }
 }

@@ -153,12 +153,379 @@
             </TabItem>
 
             <!-- 区二：配置 -->
+            <!--
+              配置区结构：上方一个"左侧导航"式 TabControl（TabStripPlacement="Left" 把标签竖排到左边，
+              视觉上即"左侧分组导航 + 右侧表单面板"，且切换无需任何代码）；下方一条统一的"保存"栏。
+              内层 TabControl 的 DataContext 在 MainWindow.xaml.cs 的 InitializeConfigEditor 里设为
+              当前 AgentConfig，于是下面各控件用 {Binding 分组.字段} 双向绑定到配置对象。
+              三处凭据（WeFlow Token / site key / AES 密钥）用 PasswordBox 掩码，不参与绑定，由 code-behind 读写。
+            -->
             <TabItem Header="配置">
-                <StackPanel Margin="16">
-                    <TextBlock Text="凭据与连接配置" FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Margin="0,8,0,0" Opacity="0.7" TextWrapping="Wrap"
-                               Text="此处将提供 WeFlow Token、下游 Base URL / site key / AES 密钥 等录入（DPAPI 加密存储、界面掩码）。骨架阶段为占位。" />
-                </StackPanel>
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TabControl x:Name="ConfigGroupTabs" Grid.Row="0" TabStripPlacement="Left">
+                        <!-- ── WeFlow ── -->
+                        <TabItem Header="WeFlow">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="基础地址 host:port" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="0" Grid.Column="1" Margin="0,6" Text="{Binding WeFlow.HostPort, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="Access Token（加密）" VerticalAlignment="Center" />
+                                    <PasswordBox x:Name="WeflowTokenBox" Grid.Row="1" Grid.Column="1" Margin="0,6" />
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="SSE 路径" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding WeFlow.SsePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,6" Text="读超时（秒）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="3" Grid.Column="1" Margin="0,6" Text="{Binding WeFlow.ReadTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,6" Text="重连退避起始（秒）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="4" Grid.Column="1" Margin="0,6" Text="{Binding WeFlow.ReconnectBackoffStartSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,6" Text="重连退避上限（秒）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="5" Grid.Column="1" Margin="0,6" Text="{Binding WeFlow.ReconnectBackoffMaxSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,6" Text="最大重连次数（0=无限）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="6" Grid.Column="1" Margin="0,6" Text="{Binding WeFlow.MaxReconnectAttempts, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Margin="0,6" Text="health 探活间隔（秒）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="7" Grid.Column="1" Margin="0,6" Text="{Binding WeFlow.HealthIntervalSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <!-- ── 下游 ── -->
+                        <TabItem Header="下游">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="Base URL（https）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="0" Grid.Column="1" Margin="0,6" Text="{Binding Downstream.BaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="site key（加密）" VerticalAlignment="Center" />
+                                    <PasswordBox x:Name="SiteKeyBox" Grid.Row="1" Grid.Column="1" Margin="0,6" />
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="AES 密钥（加密，≥16 字节）" VerticalAlignment="Center" />
+                                    <PasswordBox x:Name="AesKeyBox" Grid.Row="2" Grid.Column="1" Margin="0,6" />
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,6" Text="实时生成 token" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="3" Grid.Column="1" Margin="0,6" IsChecked="{Binding Downstream.RealtimeTokenGeneration, Mode=TwoWay}" />
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,6" Text="请求/ACK 超时（秒）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="4" Grid.Column="1" Margin="0,6" Text="{Binding Downstream.RequestTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,6" Text="重试次数" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="5" Grid.Column="1" Margin="0,6" Text="{Binding Downstream.RetryCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,6" Text="重试退避（秒）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="6" Grid.Column="1" Margin="0,6" Text="{Binding Downstream.RetryBackoffSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Margin="0,6" Text="成功判定（契约固定）" VerticalAlignment="Center" Opacity="0.7" />
+                                    <TextBlock Grid.Row="7" Grid.Column="1" Margin="0,6" Text="{Binding Downstream.SuccessRule}" VerticalAlignment="Center" Opacity="0.7" />
+                                </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <!-- ── 媒体 ── -->
+                        <TabItem Header="媒体">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="启用取回转存" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Media.EnableRelay, Mode=TwoWay}" />
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="判定方式" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="DetectModeBox" Grid.Row="1" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Media.DetectMode, Mode=TwoWay}" />
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="占位符列表（每行一个）" VerticalAlignment="Top" />
+                                    <TextBox x:Name="PlaceholdersBox" Grid.Row="2" Grid.Column="1" Margin="0,6" AcceptsReturn="True" MinHeight="64" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,6" Text="取回方式" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="FetchModeBox" Grid.Row="3" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Media.FetchMode, Mode=TwoWay}" />
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,6" Text="取回超时（秒）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="4" Grid.Column="1" Margin="0,6" Text="{Binding Media.FetchTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,6" Text="取回重试次数" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="5" Grid.Column="1" Margin="0,6" Text="{Binding Media.FetchRetry, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,6" Text="单文件上限（MB）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="6" Grid.Column="1" Margin="0,6" Text="{Binding Media.MaxFileSizeMb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Margin="0,6" Text="超限处理" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="OversizePolicyBox" Grid.Row="7" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Media.OversizePolicy, Mode=TwoWay}" />
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Margin="0,6" Text="临时目录（空=默认）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="8" Grid.Column="1" Margin="0,6" Text="{Binding Media.TempDir, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="9" Grid.Column="0" Margin="0,6" Text="临时总量上限（MB，空=不限）" VerticalAlignment="Center" />
+                                    <TextBox x:Name="TotalSizeCapBox" Grid.Row="9" Grid.Column="1" Margin="0,6" />
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Margin="0,6" Text="转存方式（契约固定）" VerticalAlignment="Center" Opacity="0.7" />
+                                    <TextBlock Grid.Row="10" Grid.Column="1" Margin="0,6" Text="{Binding Media.TransferMode}" VerticalAlignment="Center" Opacity="0.7" />
+                                </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <!-- ── 补偿 ── -->
+                        <TabItem Header="补偿">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="启用补偿" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Catchup.Enabled, Mode=TwoWay}" />
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="触发时机" VerticalAlignment="Center" />
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,6" Orientation="Horizontal">
+                                        <CheckBox x:Name="TrigReconnect" Content="重连后" Margin="0,0,16,0" />
+                                        <CheckBox x:Name="TrigStartup"   Content="启动后" Margin="0,0,16,0" />
+                                        <CheckBox x:Name="TrigScheduled" Content="定时巡检" />
+                                    </StackPanel>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="定时间隔（分钟）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Catchup.IntervalMinutes, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,6" Text="回溯上限（小时）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="3" Grid.Column="1" Margin="0,6" Text="{Binding Catchup.MaxLookbackHours, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,6" Text="单次最大条数" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="4" Grid.Column="1" Margin="0,6" Text="{Binding Catchup.MaxItemsPerRun, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <!-- ── 去重 ── -->
+                        <TabItem Header="去重">
+                            <Grid Margin="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="保留时长（小时）" VerticalAlignment="Center" />
+                                <TextBox  Grid.Row="0" Grid.Column="1" Margin="0,6" Text="{Binding Dedup.RetentionHours, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="去重键（契约固定）" VerticalAlignment="Center" Opacity="0.7" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,6" Text="{Binding Dedup.Key}" VerticalAlignment="Center" Opacity="0.7" />
+                            </Grid>
+                        </TabItem>
+
+                        <!-- ── 过滤 ── -->
+                        <TabItem Header="过滤">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="转发 revoke 撤回" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Filter.ForwardRevoke, Mode=TwoWay}" />
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="会话白名单（每行一个）" VerticalAlignment="Top" />
+                                    <TextBox x:Name="AllowListBox" Grid.Row="1" Grid.Column="1" Margin="0,6" AcceptsReturn="True" MinHeight="56" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="会话黑名单（每行一个）" VerticalAlignment="Top" />
+                                    <TextBox x:Name="BlockListBox" Grid.Row="2" Grid.Column="1" Margin="0,6" AcceptsReturn="True" MinHeight="56" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+                                </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <!-- ── 心跳 ── -->
+                        <TabItem Header="心跳">
+                            <Grid Margin="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="启用心跳" VerticalAlignment="Center" />
+                                <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Heartbeat.Enabled, Mode=TwoWay}" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="端点路径" VerticalAlignment="Center" />
+                                <TextBox  Grid.Row="1" Grid.Column="1" Margin="0,6" Text="{Binding Heartbeat.EndpointPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="间隔（秒）" VerticalAlignment="Center" />
+                                <TextBox  Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Heartbeat.IntervalSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,6" Text="状态变更即报" VerticalAlignment="Center" />
+                                <CheckBox Grid.Row="3" Grid.Column="1" Margin="0,6" IsChecked="{Binding Heartbeat.ReportOnStateChange, Mode=TwoWay}" />
+                            </Grid>
+                        </TabItem>
+
+                        <!-- ── 运行 ── -->
+                        <TabItem Header="运行">
+                            <Grid Margin="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="开机自启" VerticalAlignment="Center" />
+                                <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Runtime.AutoStart, Mode=TwoWay}" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="启动即最小化" VerticalAlignment="Center" />
+                                <CheckBox Grid.Row="1" Grid.Column="1" Margin="0,6" IsChecked="{Binding Runtime.StartMinimized, Mode=TwoWay}" />
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="关闭=最小化到托盘" VerticalAlignment="Center" />
+                                <CheckBox Grid.Row="2" Grid.Column="1" Margin="0,6" IsChecked="{Binding Runtime.CloseToTray, Mode=TwoWay}" />
+                            </Grid>
+                        </TabItem>
+
+                        <!-- ── 同步 ── -->
+                        <TabItem Header="同步">
+                            <Grid Margin="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="初始同步策略" VerticalAlignment="Center" />
+                                <ComboBox x:Name="InitialStrategyBox" Grid.Row="0" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Sync.InitialStrategy, Mode=TwoWay}" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="初始回溯窗口（小时）" VerticalAlignment="Center" />
+                                <TextBox x:Name="InitialLookbackBox" Grid.Row="1" Grid.Column="1" Margin="0,6" />
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="指定起点（yyyy-MM-dd HH:mm）" VerticalAlignment="Center" />
+                                <TextBox x:Name="SpecifiedStartBox" Grid.Row="2" Grid.Column="1" Margin="0,6" />
+                            </Grid>
+                        </TabItem>
+
+                        <!-- ── 安装 ── -->
+                        <TabItem Header="安装">
+                            <Grid Margin="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="本地状态存储位置" VerticalAlignment="Center" />
+                                <TextBox  Grid.Row="0" Grid.Column="1" Margin="0,6" Text="{Binding Install.StateStorageLocation, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="卸载时本地状态" VerticalAlignment="Center" />
+                                <ComboBox x:Name="UninstallPolicyBox" Grid.Row="1" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Install.UninstallStatePolicy, Mode=TwoWay}" />
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="交付/自启形态（固定）" VerticalAlignment="Center" Opacity="0.7" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Install.DeliveryForm}" VerticalAlignment="Center" Opacity="0.7" />
+                            </Grid>
+                        </TabItem>
+
+                        <!-- ── 日志 ── -->
+                        <TabItem Header="日志">
+                            <Grid Margin="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="级别" VerticalAlignment="Center" />
+                                <ComboBox x:Name="LogLevelBox" Grid.Row="0" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Logging.Level, Mode=TwoWay}" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="保留天数" VerticalAlignment="Center" />
+                                <TextBox  Grid.Row="1" Grid.Column="1" Margin="0,6" Text="{Binding Logging.RetentionDays, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="单文件上限（MB）" VerticalAlignment="Center" />
+                                <TextBox  Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Logging.MaxFileSizeMb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            </Grid>
+                        </TabItem>
+
+                        <!-- ── 高级 ── -->
+                        <TabItem Header="高级">
+                            <Grid Margin="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="演练模式（Dry-run）" VerticalAlignment="Center" />
+                                <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Advanced.DryRun, Mode=TwoWay}" />
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+
+                    <!-- 底部统一保存栏：左侧提示（保存结果/校验错误），右侧保存按钮。 -->
+                    <Grid Grid.Row="1" Margin="8,12,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="SaveHintText" Grid.Column="0" VerticalAlignment="Center" TextWrapping="Wrap" Opacity="0.85" />
+                        <ui:Button x:Name="SaveButton" Grid.Column="1" Content="保存" Icon="{ui:SymbolIcon Save24}"
+                                   Appearance="Primary" Click="OnSaveClick" />
+                    </Grid>
+                </Grid>
             </TabItem>
 
             <!-- 区三：日志 / 审计 -->

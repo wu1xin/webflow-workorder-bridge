@@ -55,6 +55,8 @@ public partial class App : Application
         // `new MainWindow()` = 创建（实例化）一个主窗口对象。`new` 关键字调用构造函数。
         _window = new MainWindow();
         _window.ApplyStatus(result);    // 调用窗口上的方法，把启动结果填进界面。`.` 是成员访问运算符。
+        // 装载配置编辑器：把已读到的配置 / 凭据 / 保存服务交给界面，使「配置」区可录入、可保存。
+        _window.InitializeConfigEditor(result.Config, result.Credentials, result.SaveService);
 
         // 创建托盘图标。注意这里的写法：
         // `result.Status.Health` = 链式访问：result 的 Status 属性，再取它的 Health 属性。
