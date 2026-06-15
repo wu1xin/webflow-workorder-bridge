@@ -1,0 +1,48 @@
+# ---- .NET ----
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Pp]ublish/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build results / single-file publish
+artifacts/
+*.dll
+*.exe
+*.pdb
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coverage.json
+coverage/
+
+# Rider / VS / VS Code
+.vs/
+.idea/
+*.DotSettings.user
+
+# NuGet
+*.nupkg
+packages/
+.nuget/
+
+# ---- App runtime/local state (should never be committed) ----
+# Local credential store / DPAPI blobs, breakpoints, dedup db, queues, logs
+secrets.dat
+state.db
+*.litedb
+logs/
+
+# OS
+Thumbs.db
+desktop.ini
+
+design/

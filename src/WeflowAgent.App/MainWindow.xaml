@@ -1,0 +1,183 @@
+<!--
+  这是主窗口的界面定义（XAML）。它和 MainWindow.xaml.cs 是同一个类的两半（partial）。
+  WPF 界面是"树形"的：一个根元素里层层嵌套子元素，类似 HTML 的 DOM 树。
+
+  ⚠ 再次提醒：XML 注释不能塞进开始标签的属性中间，所以根元素 <ui:FluentWindow> 的属性
+     只能在这里集中解释（xmlns 前缀的含义与 App.xaml 相同，不再重复，只讲新属性）：
+
+     · x:Class="WeflowAgent.App.MainWindow"  绑定到 C# 的 partial class MainWindow。
+     · xmlns:d / xmlns:mc + mc:Ignorable="d"  这三者配套：d: 是"设计器专用"前缀（仅 Visual
+         Studio 设计预览时用），mc:Ignorable="d" 告诉运行时"忽略 d: 开头的东西"，不影响实际运行。
+     · Title          窗口标题栏文字。
+     · Width/Height   初始宽高（像素）。MinWidth/MinHeight 是可缩小到的最小尺寸。
+     · ExtendsContentIntoTitleBar="True"  让内容延伸进标题栏区域（Fluent 风格的无边框沉浸感）。
+     · WindowBackdropType="Mica"  窗口背景用 Win11 的 Mica 材质（半透明磨砂）。
+     · WindowStartupLocation="CenterScreen"  启动时窗口居中显示在屏幕中央。
+     · Icon="pack://application:,,,/Assets/app.ico"
+         窗口图标（任务栏按钮、Alt-Tab、标题栏左上角）。pack URI 指向编进程序集的 app.ico 资源
+         （见 .csproj 的 <Resource Include="Assets\*.ico" />）。三斜杠后是程序集内资源路径。
+-->
+<ui:FluentWindow x:Class="WeflowAgent.App.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+                 xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:local="clr-namespace:WeflowAgent.App"
+                 mc:Ignorable="d"
+                 Title="weflow 工单转发代理"
+                 Width="960" Height="640"
+                 MinWidth="720" MinHeight="480"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowStartupLocation="CenterScreen"
+                 Icon="pack://application:,,,/Assets/app.ico">
+
+    <!--
+      Grid（网格）是最常用的布局容器：把空间划成行和列，子元素再用 Grid.Row/Grid.Column 落位。
+      一个容器（如 Window）只能有"一个"直接子元素，所以这里用 Grid 当总容器再往里放东西。
+    -->
+    <Grid>
+        <!--
+          先定义行。这里两行：
+          · Height="Auto"  这一行"按内容自适应高度"（内容多高它就多高）。
+          · Height="*"     这一行"占满剩余全部空间"（* 表示按比例瓜分剩余，单独一个 * 即全占）。
+          列定义同理用 Grid.ColumnDefinitions（下面卡片里会见到）。
+        -->
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!--
+          ui:TitleBar 是 WPF UI 提供的标题栏控件。Grid.Row="0" 是"附加属性"：
+          它本不属于 TitleBar，而是 Grid 附加给子元素、用来声明"我放在第 0 行"。行号从 0 开始。
+        -->
+        <!--
+          给 Fluent 标题栏配上图标：ui:TitleBar 的 Icon 不会自动取 Window.Icon，需显式给。
+          ui:ImageIcon 是 WPF UI 的图片图标控件，Source 指向同一个 app.ico 资源 → 标题栏左上角显示。
+        -->
+        <ui:TitleBar Grid.Row="0" Title="weflow 工单转发代理">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/Assets/app.ico" Width="16" Height="16" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <!--
+          TabControl = 选项卡容器（顶部一排标签，点哪个显示哪页）。放在第 1 行（占满剩余空间）。
+          Margin="12,4,12,12" = 外边距，四个数字依次是 左,上,右,下（像素）。
+        -->
+        <TabControl Grid.Row="1" Margin="12,4,12,12">
+            <!-- 区一：状态概览 -->
+            <!-- TabItem = 一个选项卡页；Header 是标签上显示的文字。 -->
+            <TabItem Header="状态概览">
+                <!-- ScrollViewer = 滚动容器，内容超出时自动出现垂直滚动条。 -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <!--
+                      StackPanel = "堆叠"布局：把子元素依次排成一列（默认竖排）或一行。
+                      Orientation="Horizontal" 改成横排（见下一层）。Margin="16" 四边都留 16 像素。
+                    -->
+                    <StackPanel Margin="16" >
+                        <StackPanel Orientation="Horizontal" >
+                            <!--
+                              Border = 带边框/圆角/背景的矩形容器，里面只放一个子元素。
+                              x:Name="HealthPill" 给它取名 → C# 里就能用 HealthPill 这个字段访问它
+                              （MainWindow.xaml.cs 的 ApplyStatus 里就改了它的 Background）。
+                              CornerRadius="12" 圆角半径；Padding="14,6" 内边距（左右14、上下6）；
+                              Background="#3FB950" 背景色（#RRGGBB 十六进制，这里是绿色）。
+                            -->
+                            <Border x:Name="HealthPill"
+                                    CornerRadius="12" Padding="14,6" Background="#3FB950">
+                                <!--
+                                  TextBlock = 显示一段只读文字的控件（不可编辑）。
+                                  Foreground 文字颜色；FontWeight="SemiBold" 半粗体。
+                                  x:Name="HealthText" → C# 里改它的 .Text 即可换文字。
+                                -->
+                                <TextBlock x:Name="HealthText" Text="● 就绪"
+                                           Foreground="White" FontWeight="SemiBold" />
+                            </Border>
+                            <!-- VerticalAlignment="Center" 垂直居中对齐；TextWrapping="Wrap" 文字过长自动换行。 -->
+                            <TextBlock x:Name="SummaryText" VerticalAlignment="Center"
+                                       Margin="14,0,0,0" Text="—" TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <!-- ui:Card = WPF UI 的卡片容器（带圆角和淡背景，用来分组内容）。Margin 第二个数=上间距18。 -->
+                        <ui:Card Margin="0,18,0,0">
+                            <StackPanel>
+                                <TextBlock Text="运行态" FontSize="16" FontWeight="SemiBold" />
+                                <!-- 这个内层 Grid 用来做"标签 : 值"两列的对齐表格。 -->
+                                <Grid Margin="0,10,0,0">
+                                    <!-- 两列：左列固定 160 像素放标签，右列 * 占满剩余放内容。 -->
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="160" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <!-- 四行，全部 Auto（按内容高），对应下面四组"标签/值"。 -->
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <!-- 每个 TextBlock 用 Grid.Row / Grid.Column 指定落在第几行第几列。Opacity=0.7 半透明（弱化标签）。 -->
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,4" Text="状态目录" Opacity="0.7" />
+                                    <!-- 带 x:Name 的是"值"控件，运行时由 C# 填入实际内容。 -->
+                                    <TextBlock x:Name="StateDirText" Grid.Row="0" Grid.Column="1" Margin="0,4" Text="—" TextWrapping="Wrap" />
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,4" Text="存储模式版本" Opacity="0.7" />
+                                    <TextBlock x:Name="SchemaText" Grid.Row="1" Grid.Column="1" Margin="0,4" Text="—" />
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,4" Text="SSE 连接" Opacity="0.7" />
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,4" Text="未连接（骨架占位）" />
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,4" Text="下游链路" Opacity="0.7" />
+                                    <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,4" Text="未连接（骨架占位）" />
+                                </Grid>
+                            </StackPanel>
+                        </ui:Card>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                            <!--
+                              ui:Button = 按钮。Content 是按钮上的文字。
+                              Icon="{ui:SymbolIcon ArrowSync24}" 用了"标记扩展"语法：花括号 {} 表示
+                                "这不是普通字符串，而是要 XAML 在运行时求值的对象"，这里是取一个名为
+                                ArrowSync24 的内置图标。
+                              IsEnabled="False" = 禁用（变灰、不可点）——因为这功能还是占位、未实现。
+                            -->
+                            <ui:Button Content="立即同步" Icon="{ui:SymbolIcon ArrowSync24}" IsEnabled="False" />
+                            <ui:Button Content="从指定时间点同步" Margin="10,0,0,0" IsEnabled="False" />
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- 区二：配置 -->
+            <TabItem Header="配置">
+                <StackPanel Margin="16">
+                    <TextBlock Text="凭据与连接配置" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,8,0,0" Opacity="0.7" TextWrapping="Wrap"
+                               Text="此处将提供 WeFlow Token、下游 Base URL / site key / AES 密钥 等录入（DPAPI 加密存储、界面掩码）。骨架阶段为占位。" />
+                </StackPanel>
+            </TabItem>
+
+            <!-- 区三：日志 / 审计 -->
+            <TabItem Header="日志 / 审计">
+                <StackPanel Margin="16">
+                    <TextBlock Text="日志与消息审计" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,8,0,0" Opacity="0.7" TextWrapping="Wrap"
+                               Text="此处将展示分级日志与消息审计（来源、event+rawid、code、耗时…）。骨架阶段为占位。" />
+                </StackPanel>
+            </TabItem>
+
+            <!-- 区四：测试 / 诊断 -->
+            <TabItem Header="测试 / 诊断">
+                <StackPanel Margin="16">
+                    <TextBlock Text="测试与诊断" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,8,0,0" Opacity="0.7" TextWrapping="Wrap"
+                               Text="此处将提供 连接测试(ping)、测试接收/发送、补偿测试、媒体测试、token 自测、一键诊断。骨架阶段为占位。" />
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</ui:FluentWindow>
