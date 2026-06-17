@@ -1,0 +1,23 @@
+{
+  "name": "weflow-workorder-bridge",
+  "version": "2.0.0",
+  "private": true,
+  "description": "WeFlow → work-order-system 消息转发桥接服务（Node.js + Vue）",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm -w server run dev",
+    "dev:web": "npm -w web run dev",
+    "build": "npm -w web run build && npm -w server run build",
+    "start": "npm -w server run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

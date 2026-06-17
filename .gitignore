@@ -1,1 +1,6 @@
 design/
+node_modules/
+dist/
+*.log
+# 本地运行状态目录（若在项目内调试时）
+.state/
