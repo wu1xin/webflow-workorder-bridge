@@ -1,0 +1,9 @@
+{
+  // 跨包(如 server/web 引用 shared)自动用包名 @wb/shared/...；
+  // 同一项目内自动用相对路径
+  "js/ts.preferences.importModuleSpecifier": "project-relative",
+  // 相对路径的自动导入补全带上 .js 扩展名（NodeNext 要求）
+  "js/ts.preferences.importModuleSpecifierEnding": "js",
+  // 编辑器与命令行使用同一个工作区 TypeScript 版本
+  "js/ts.tsdk.path": "node_modules/typescript/lib"
+}

@@ -1,5 +1,5 @@
 {
-  "name": "@weflow-bridge/web",
+  "name": "@wb/web",
   "version": "2.0.0",
   "private": true,
   "type": "module",
@@ -10,15 +10,15 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "element-plus": "^2.9.1",
-    "pinia": "^2.3.0",
-    "vue": "^3.5.13",
-    "vue-router": "^4.5.0"
+    "@wb/shared": "*",
+    "element-plus": "^2.14.2",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.38",
+    "vue-router": "^5.1.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.2.1",
-    "typescript": "^5.7.2",
-    "vite": "^6.0.5",
-    "vue-tsc": "^2.1.10"
+    "@vitejs/plugin-vue": "^6.0.7",
+    "vite": "^8.0.16",
+    "vue-tsc": "^3.3.5"
   }
 }

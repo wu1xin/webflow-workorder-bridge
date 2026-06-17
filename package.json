@@ -4,18 +4,22 @@
   "private": true,
   "description": "WeFlow → work-order-system 消息转发桥接服务（Node.js + Vue）",
   "workspaces": [
+    "shared",
     "server",
     "web"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "predev": "npm -w shared run build",
+    "dev": "concurrently -n shared,server,web -c gray,blue,green \"npm:dev:shared\" \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:shared": "npm -w shared run dev",
     "dev:server": "npm -w server run dev",
     "dev:web": "npm -w web run dev",
-    "build": "npm -w web run build && npm -w server run build",
+    "build": "npm -w server run build && npm -w web run build",
     "start": "npm -w server run start"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "concurrently": "^10.0.3",
+    "typescript": "^6.0.3"
   },
   "engines": {
     "node": ">=20"
