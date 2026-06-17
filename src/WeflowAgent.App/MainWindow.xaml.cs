@@ -81,7 +81,7 @@ public partial class MainWindow : FluentWindow
         UninstallPolicyBox.ItemsSource = Enum.GetValues(typeof(UninstallStatePolicy));
         LogLevelBox.ItemsSource = Enum.GetValues(typeof(LogLevel));
 
-        ConfigGroupTabs.DataContext = config;
+        ConfigPanels.DataContext = config;
 
         // 列表型字段（每行一个）。
         PlaceholdersBox.Text = string.Join(Environment.NewLine, config.Media.Placeholders);
@@ -147,7 +147,7 @@ public partial class MainWindow : FluentWindow
             // 跳到第一条错误所在分组，方便用户立刻定位。
             int index = GroupIndex(result.Validation.Errors[0].Field);
             if (index >= 0)
-                ConfigGroupTabs.SelectedIndex = index;
+                GroupList.SelectedIndex = index;
         }
     }
 

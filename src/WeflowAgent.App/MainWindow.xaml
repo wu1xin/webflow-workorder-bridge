@@ -1,21 +1,6 @@
 <!--
   这是主窗口的界面定义（XAML）。它和 MainWindow.xaml.cs 是同一个类的两半（partial）。
   WPF 界面是"树形"的：一个根元素里层层嵌套子元素，类似 HTML 的 DOM 树。
-
-  ⚠ 再次提醒：XML 注释不能塞进开始标签的属性中间，所以根元素 <ui:FluentWindow> 的属性
-     只能在这里集中解释（xmlns 前缀的含义与 App.xaml 相同，不再重复，只讲新属性）：
-
-     · x:Class="WeflowAgent.App.MainWindow"  绑定到 C# 的 partial class MainWindow。
-     · xmlns:d / xmlns:mc + mc:Ignorable="d"  这三者配套：d: 是"设计器专用"前缀（仅 Visual
-         Studio 设计预览时用），mc:Ignorable="d" 告诉运行时"忽略 d: 开头的东西"，不影响实际运行。
-     · Title          窗口标题栏文字。
-     · Width/Height   初始宽高（像素）。MinWidth/MinHeight 是可缩小到的最小尺寸。
-     · ExtendsContentIntoTitleBar="True"  让内容延伸进标题栏区域（Fluent 风格的无边框沉浸感）。
-     · WindowBackdropType="Mica"  窗口背景用 Win11 的 Mica 材质（半透明磨砂）。
-     · WindowStartupLocation="CenterScreen"  启动时窗口居中显示在屏幕中央。
-     · Icon="pack://application:,,,/Assets/app.ico"
-         窗口图标（任务栏按钮、Alt-Tab、标题栏左上角）。pack URI 指向编进程序集的 app.ico 资源
-         （见 .csproj 的 <Resource Include="Assets\*.ico" />）。三斜杠后是程序集内资源路径。
 -->
 <ui:FluentWindow x:Class="WeflowAgent.App.MainWindow"
                  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -33,86 +18,46 @@
                  WindowStartupLocation="CenterScreen"
                  Icon="pack://application:,,,/Assets/app.ico">
 
-    <!--
-      Grid（网格）是最常用的布局容器：把空间划成行和列，子元素再用 Grid.Row/Grid.Column 落位。
-      一个容器（如 Window）只能有"一个"直接子元素，所以这里用 Grid 当总容器再往里放东西。
-    -->
+    <!-- 窗口级资源：配置区"索引→可见性"转换器（左侧选哪项、右侧显示哪个面板）。 -->
+    <ui:FluentWindow.Resources>
+        <local:IndexToVisibilityConverter x:Key="IndexToVis" />
+    </ui:FluentWindow.Resources>
+
     <Grid>
-        <!--
-          先定义行。这里两行：
-          · Height="Auto"  这一行"按内容自适应高度"（内容多高它就多高）。
-          · Height="*"     这一行"占满剩余全部空间"（* 表示按比例瓜分剩余，单独一个 * 即全占）。
-          列定义同理用 Grid.ColumnDefinitions（下面卡片里会见到）。
-        -->
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!--
-          ui:TitleBar 是 WPF UI 提供的标题栏控件。Grid.Row="0" 是"附加属性"：
-          它本不属于 TitleBar，而是 Grid 附加给子元素、用来声明"我放在第 0 行"。行号从 0 开始。
-        -->
-        <!--
-          给 Fluent 标题栏配上图标：ui:TitleBar 的 Icon 不会自动取 Window.Icon，需显式给。
-          ui:ImageIcon 是 WPF UI 的图片图标控件，Source 指向同一个 app.ico 资源 → 标题栏左上角显示。
-        -->
         <ui:TitleBar Grid.Row="0" Title="weflow 工单转发代理">
             <ui:TitleBar.Icon>
                 <ui:ImageIcon Source="pack://application:,,,/Assets/app.ico" Width="16" Height="16" />
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
-        <!--
-          TabControl = 选项卡容器（顶部一排标签，点哪个显示哪页）。放在第 1 行（占满剩余空间）。
-          Margin="12,4,12,12" = 外边距，四个数字依次是 左,上,右,下（像素）。
-        -->
         <TabControl Grid.Row="1" Margin="12,4,12,12">
             <!-- 区一：状态概览 -->
-            <!-- TabItem = 一个选项卡页；Header 是标签上显示的文字。 -->
             <TabItem Header="状态概览">
-                <!-- ScrollViewer = 滚动容器，内容超出时自动出现垂直滚动条。 -->
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <!--
-                      StackPanel = "堆叠"布局：把子元素依次排成一列（默认竖排）或一行。
-                      Orientation="Horizontal" 改成横排（见下一层）。Margin="16" 四边都留 16 像素。
-                    -->
                     <StackPanel Margin="16" >
                         <StackPanel Orientation="Horizontal" >
-                            <!--
-                              Border = 带边框/圆角/背景的矩形容器，里面只放一个子元素。
-                              x:Name="HealthPill" 给它取名 → C# 里就能用 HealthPill 这个字段访问它
-                              （MainWindow.xaml.cs 的 ApplyStatus 里就改了它的 Background）。
-                              CornerRadius="12" 圆角半径；Padding="14,6" 内边距（左右14、上下6）；
-                              Background="#3FB950" 背景色（#RRGGBB 十六进制，这里是绿色）。
-                            -->
                             <Border x:Name="HealthPill"
                                     CornerRadius="12" Padding="14,6" Background="#3FB950">
-                                <!--
-                                  TextBlock = 显示一段只读文字的控件（不可编辑）。
-                                  Foreground 文字颜色；FontWeight="SemiBold" 半粗体。
-                                  x:Name="HealthText" → C# 里改它的 .Text 即可换文字。
-                                -->
                                 <TextBlock x:Name="HealthText" Text="● 就绪"
                                            Foreground="White" FontWeight="SemiBold" />
                             </Border>
-                            <!-- VerticalAlignment="Center" 垂直居中对齐；TextWrapping="Wrap" 文字过长自动换行。 -->
                             <TextBlock x:Name="SummaryText" VerticalAlignment="Center"
                                        Margin="14,0,0,0" Text="—" TextWrapping="Wrap" />
                         </StackPanel>
 
-                        <!-- ui:Card = WPF UI 的卡片容器（带圆角和淡背景，用来分组内容）。Margin 第二个数=上间距18。 -->
                         <ui:Card Margin="0,18,0,0">
                             <StackPanel>
                                 <TextBlock Text="运行态" FontSize="16" FontWeight="SemiBold" />
-                                <!-- 这个内层 Grid 用来做"标签 : 值"两列的对齐表格。 -->
                                 <Grid Margin="0,10,0,0">
-                                    <!-- 两列：左列固定 160 像素放标签，右列 * 占满剩余放内容。 -->
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="160" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <!-- 四行，全部 Auto（按内容高），对应下面四组"标签/值"。 -->
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
@@ -120,9 +65,7 @@
                                         <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
 
-                                    <!-- 每个 TextBlock 用 Grid.Row / Grid.Column 指定落在第几行第几列。Opacity=0.7 半透明（弱化标签）。 -->
                                     <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,4" Text="状态目录" Opacity="0.7" />
-                                    <!-- 带 x:Name 的是"值"控件，运行时由 C# 填入实际内容。 -->
                                     <TextBlock x:Name="StateDirText" Grid.Row="0" Grid.Column="1" Margin="0,4" Text="—" TextWrapping="Wrap" />
 
                                     <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,4" Text="存储模式版本" Opacity="0.7" />
@@ -138,13 +81,6 @@
                         </ui:Card>
 
                         <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
-                            <!--
-                              ui:Button = 按钮。Content 是按钮上的文字。
-                              Icon="{ui:SymbolIcon ArrowSync24}" 用了"标记扩展"语法：花括号 {} 表示
-                                "这不是普通字符串，而是要 XAML 在运行时求值的对象"，这里是取一个名为
-                                ArrowSync24 的内置图标。
-                              IsEnabled="False" = 禁用（变灰、不可点）——因为这功能还是占位、未实现。
-                            -->
                             <ui:Button Content="立即同步" Icon="{ui:SymbolIcon ArrowSync24}" IsEnabled="False" />
                             <ui:Button Content="从指定时间点同步" Margin="10,0,0,0" IsEnabled="False" />
                         </StackPanel>
@@ -154,11 +90,12 @@
 
             <!-- 区二：配置 -->
             <!--
-              配置区结构：上方一个"左侧导航"式 TabControl（TabStripPlacement="Left" 把标签竖排到左边，
-              视觉上即"左侧分组导航 + 右侧表单面板"，且切换无需任何代码）；下方一条统一的"保存"栏。
-              内层 TabControl 的 DataContext 在 MainWindow.xaml.cs 的 InitializeConfigEditor 里设为
-              当前 AgentConfig，于是下面各控件用 {Binding 分组.字段} 双向绑定到配置对象。
-              三处凭据（WeFlow Token / site key / AES 密钥）用 PasswordBox 掩码，不参与绑定，由 code-behind 读写。
+              配置区布局：左侧一个 ListBox 做"分组导航"，右侧一个 Grid 叠放全部 12 个分组面板，
+              每个面板的 Visibility 由 IndexToVis 转换器按 ListBox.SelectedIndex 控制——选中第 N 项即显示第 N 个面板。
+              （早先用 TabControl + TabStripPlacement=Left，在 WPF UI 的 Fluent 样式下渲染异常：tab 条被拉成全宽、
+                内容区不可见，故改为 ListBox + 叠放面板这套不依赖第三方 tab 样式的实现。）
+              右侧面板容器 ConfigPanels 的 DataContext 在 code-behind 设为当前 AgentConfig；普通字段双向绑定到它，
+              三处凭据用 PasswordBox 掩码（不绑定，code-behind 读写）。底部一条统一"保存"栏。
             -->
             <TabItem Header="配置">
                 <Grid Margin="8">
@@ -167,10 +104,34 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <TabControl x:Name="ConfigGroupTabs" Grid.Row="0" TabStripPlacement="Left">
-                        <!-- ── WeFlow ── -->
-                        <TabItem Header="WeFlow">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- 左侧分组导航 -->
+                        <ListBox x:Name="GroupList" Grid.Column="0" SelectedIndex="0" Margin="0,0,8,0" BorderThickness="0">
+                            <ListBoxItem Content="WeFlow" />
+                            <ListBoxItem Content="下游" />
+                            <ListBoxItem Content="媒体" />
+                            <ListBoxItem Content="补偿" />
+                            <ListBoxItem Content="去重" />
+                            <ListBoxItem Content="过滤" />
+                            <ListBoxItem Content="心跳" />
+                            <ListBoxItem Content="运行" />
+                            <ListBoxItem Content="同步" />
+                            <ListBoxItem Content="安装" />
+                            <ListBoxItem Content="日志" />
+                            <ListBoxItem Content="高级" />
+                        </ListBox>
+
+                        <!-- 右侧：12 个分组面板叠放，按选中项切换可见 -->
+                        <Grid x:Name="ConfigPanels" Grid.Column="1">
+
+                            <!-- 面板 0：WeFlow -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=0}">
                                 <Grid Margin="16">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="210" />
@@ -208,11 +169,10 @@
                                     <TextBox  Grid.Row="7" Grid.Column="1" Margin="0,6" Text="{Binding WeFlow.HealthIntervalSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 </Grid>
                             </ScrollViewer>
-                        </TabItem>
 
-                        <!-- ── 下游 ── -->
-                        <TabItem Header="下游">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <!-- 面板 1：下游 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=1}">
                                 <Grid Margin="16">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="210" />
@@ -250,11 +210,10 @@
                                     <TextBlock Grid.Row="7" Grid.Column="1" Margin="0,6" Text="{Binding Downstream.SuccessRule}" VerticalAlignment="Center" Opacity="0.7" />
                                 </Grid>
                             </ScrollViewer>
-                        </TabItem>
 
-                        <!-- ── 媒体 ── -->
-                        <TabItem Header="媒体">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <!-- 面板 2：媒体 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=2}">
                                 <Grid Margin="16">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="210" />
@@ -303,11 +262,10 @@
                                     <TextBlock Grid.Row="10" Grid.Column="1" Margin="0,6" Text="{Binding Media.TransferMode}" VerticalAlignment="Center" Opacity="0.7" />
                                 </Grid>
                             </ScrollViewer>
-                        </TabItem>
 
-                        <!-- ── 补偿 ── -->
-                        <TabItem Header="补偿">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <!-- 面板 3：补偿 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=3}">
                                 <Grid Margin="16">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="210" />
@@ -339,30 +297,30 @@
                                     <TextBox  Grid.Row="4" Grid.Column="1" Margin="0,6" Text="{Binding Catchup.MaxItemsPerRun, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 </Grid>
                             </ScrollViewer>
-                        </TabItem>
 
-                        <!-- ── 去重 ── -->
-                        <TabItem Header="去重">
-                            <Grid Margin="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                            <!-- 面板 4：去重 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=4}">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="保留时长（小时）" VerticalAlignment="Center" />
-                                <TextBox  Grid.Row="0" Grid.Column="1" Margin="0,6" Text="{Binding Dedup.RetentionHours, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="保留时长（小时）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="0" Grid.Column="1" Margin="0,6" Text="{Binding Dedup.RetentionHours, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="去重键（契约固定）" VerticalAlignment="Center" Opacity="0.7" />
-                                <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,6" Text="{Binding Dedup.Key}" VerticalAlignment="Center" Opacity="0.7" />
-                            </Grid>
-                        </TabItem>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="去重键（契约固定）" VerticalAlignment="Center" Opacity="0.7" />
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,6" Text="{Binding Dedup.Key}" VerticalAlignment="Center" Opacity="0.7" />
+                                </Grid>
+                            </ScrollViewer>
 
-                        <!-- ── 过滤 ── -->
-                        <TabItem Header="过滤">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <!-- 面板 5：过滤 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=5}">
                                 <Grid Margin="16">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="210" />
@@ -382,138 +340,144 @@
                                     <TextBox x:Name="BlockListBox" Grid.Row="2" Grid.Column="1" Margin="0,6" AcceptsReturn="True" MinHeight="56" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
                                 </Grid>
                             </ScrollViewer>
-                        </TabItem>
 
-                        <!-- ── 心跳 ── -->
-                        <TabItem Header="心跳">
-                            <Grid Margin="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                            <!-- 面板 6：心跳 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=6}">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="启用心跳" VerticalAlignment="Center" />
-                                <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Heartbeat.Enabled, Mode=TwoWay}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="启用心跳" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Heartbeat.Enabled, Mode=TwoWay}" />
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="端点路径" VerticalAlignment="Center" />
-                                <TextBox  Grid.Row="1" Grid.Column="1" Margin="0,6" Text="{Binding Heartbeat.EndpointPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="端点路径" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="1" Grid.Column="1" Margin="0,6" Text="{Binding Heartbeat.EndpointPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="间隔（秒）" VerticalAlignment="Center" />
-                                <TextBox  Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Heartbeat.IntervalSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="间隔（秒）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Heartbeat.IntervalSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                                <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,6" Text="状态变更即报" VerticalAlignment="Center" />
-                                <CheckBox Grid.Row="3" Grid.Column="1" Margin="0,6" IsChecked="{Binding Heartbeat.ReportOnStateChange, Mode=TwoWay}" />
-                            </Grid>
-                        </TabItem>
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,6" Text="状态变更即报" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="3" Grid.Column="1" Margin="0,6" IsChecked="{Binding Heartbeat.ReportOnStateChange, Mode=TwoWay}" />
+                                </Grid>
+                            </ScrollViewer>
 
-                        <!-- ── 运行 ── -->
-                        <TabItem Header="运行">
-                            <Grid Margin="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                            <!-- 面板 7：运行 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=7}">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="开机自启" VerticalAlignment="Center" />
-                                <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Runtime.AutoStart, Mode=TwoWay}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="开机自启" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Runtime.AutoStart, Mode=TwoWay}" />
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="启动即最小化" VerticalAlignment="Center" />
-                                <CheckBox Grid.Row="1" Grid.Column="1" Margin="0,6" IsChecked="{Binding Runtime.StartMinimized, Mode=TwoWay}" />
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="启动即最小化" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="1" Grid.Column="1" Margin="0,6" IsChecked="{Binding Runtime.StartMinimized, Mode=TwoWay}" />
 
-                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="关闭=最小化到托盘" VerticalAlignment="Center" />
-                                <CheckBox Grid.Row="2" Grid.Column="1" Margin="0,6" IsChecked="{Binding Runtime.CloseToTray, Mode=TwoWay}" />
-                            </Grid>
-                        </TabItem>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="关闭=最小化到托盘" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="2" Grid.Column="1" Margin="0,6" IsChecked="{Binding Runtime.CloseToTray, Mode=TwoWay}" />
+                                </Grid>
+                            </ScrollViewer>
 
-                        <!-- ── 同步 ── -->
-                        <TabItem Header="同步">
-                            <Grid Margin="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                            <!-- 面板 8：同步 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=8}">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="初始同步策略" VerticalAlignment="Center" />
-                                <ComboBox x:Name="InitialStrategyBox" Grid.Row="0" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Sync.InitialStrategy, Mode=TwoWay}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="初始同步策略" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="InitialStrategyBox" Grid.Row="0" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Sync.InitialStrategy, Mode=TwoWay}" />
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="初始回溯窗口（小时）" VerticalAlignment="Center" />
-                                <TextBox x:Name="InitialLookbackBox" Grid.Row="1" Grid.Column="1" Margin="0,6" />
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="初始回溯窗口（小时）" VerticalAlignment="Center" />
+                                    <TextBox x:Name="InitialLookbackBox" Grid.Row="1" Grid.Column="1" Margin="0,6" />
 
-                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="指定起点（yyyy-MM-dd HH:mm）" VerticalAlignment="Center" />
-                                <TextBox x:Name="SpecifiedStartBox" Grid.Row="2" Grid.Column="1" Margin="0,6" />
-                            </Grid>
-                        </TabItem>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="指定起点（yyyy-MM-dd HH:mm）" VerticalAlignment="Center" />
+                                    <TextBox x:Name="SpecifiedStartBox" Grid.Row="2" Grid.Column="1" Margin="0,6" />
+                                </Grid>
+                            </ScrollViewer>
 
-                        <!-- ── 安装 ── -->
-                        <TabItem Header="安装">
-                            <Grid Margin="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                            <!-- 面板 9：安装 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=9}">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="本地状态存储位置" VerticalAlignment="Center" />
-                                <TextBox  Grid.Row="0" Grid.Column="1" Margin="0,6" Text="{Binding Install.StateStorageLocation, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="本地状态存储位置" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="0" Grid.Column="1" Margin="0,6" Text="{Binding Install.StateStorageLocation, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="卸载时本地状态" VerticalAlignment="Center" />
-                                <ComboBox x:Name="UninstallPolicyBox" Grid.Row="1" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Install.UninstallStatePolicy, Mode=TwoWay}" />
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="卸载时本地状态" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="UninstallPolicyBox" Grid.Row="1" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Install.UninstallStatePolicy, Mode=TwoWay}" />
 
-                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="交付/自启形态（固定）" VerticalAlignment="Center" Opacity="0.7" />
-                                <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Install.DeliveryForm}" VerticalAlignment="Center" Opacity="0.7" />
-                            </Grid>
-                        </TabItem>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="交付/自启形态（固定）" VerticalAlignment="Center" Opacity="0.7" />
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Install.DeliveryForm}" VerticalAlignment="Center" Opacity="0.7" />
+                                </Grid>
+                            </ScrollViewer>
 
-                        <!-- ── 日志 ── -->
-                        <TabItem Header="日志">
-                            <Grid Margin="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                            <!-- 面板 10：日志 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=10}">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="级别" VerticalAlignment="Center" />
-                                <ComboBox x:Name="LogLevelBox" Grid.Row="0" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Logging.Level, Mode=TwoWay}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="级别" VerticalAlignment="Center" />
+                                    <ComboBox x:Name="LogLevelBox" Grid.Row="0" Grid.Column="1" Margin="0,6" SelectedItem="{Binding Logging.Level, Mode=TwoWay}" />
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="保留天数" VerticalAlignment="Center" />
-                                <TextBox  Grid.Row="1" Grid.Column="1" Margin="0,6" Text="{Binding Logging.RetentionDays, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,6" Text="保留天数" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="1" Grid.Column="1" Margin="0,6" Text="{Binding Logging.RetentionDays, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="单文件上限（MB）" VerticalAlignment="Center" />
-                                <TextBox  Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Logging.MaxFileSizeMb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                            </Grid>
-                        </TabItem>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,6" Text="单文件上限（MB）" VerticalAlignment="Center" />
+                                    <TextBox  Grid.Row="2" Grid.Column="1" Margin="0,6" Text="{Binding Logging.MaxFileSizeMb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+                            </ScrollViewer>
 
-                        <!-- ── 高级 ── -->
-                        <TabItem Header="高级">
-                            <Grid Margin="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                            <!-- 面板 11：高级 -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding SelectedIndex, ElementName=GroupList, Converter={StaticResource IndexToVis}, ConverterParameter=11}">
+                                <Grid Margin="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="演练模式（Dry-run）" VerticalAlignment="Center" />
-                                <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Advanced.DryRun, Mode=TwoWay}" />
-                            </Grid>
-                        </TabItem>
-                    </TabControl>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,6" Text="演练模式（Dry-run）" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="0" Grid.Column="1" Margin="0,6" IsChecked="{Binding Advanced.DryRun, Mode=TwoWay}" />
+                                </Grid>
+                            </ScrollViewer>
+                        </Grid>
+                    </Grid>
 
                     <!-- 底部统一保存栏：左侧提示（保存结果/校验错误），右侧保存按钮。 -->
                     <Grid Grid.Row="1" Margin="8,12,8,4">
