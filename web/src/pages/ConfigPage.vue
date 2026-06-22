@@ -1,31 +1,28 @@
 <template>
-  <el-card>
-    <template #header>
-      <div class="config_header">
-        <span>上游（WeFlow）</span>
-      </div>
-    </template>
-    <WeflowConfigForm />
-  </el-card>
+    <div class="config_page">
+        <WeflowConfig />
+    </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import WeflowConfigForm from '@/components/config/WeflowConfigForm.vue'
 import { useConfigStore } from '@/stores/config'
+import WeflowConfig from '@/components/config/WeflowConfig.vue'
 
 const store = useConfigStore()
 
 onMounted(() => {
-  void store.load()
+    store.load()
 })
 </script>
 
 <style scoped lang="scss">
-.config_header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 600;
+.config_page {
+    display: flex;
+    flex-wrap: wrap;
+    > .el-card {
+        flex: 1;
+        max-width: 500px;
+    }
 }
 </style>

@@ -1,25 +1,26 @@
 {
-  "name": "@wb/web",
-  "version": "2.0.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "type-check": "vue-tsc --noEmit"
-  },
-  "dependencies": {
-    "@wb/shared": "*",
-    "element-plus": "^2.14.2",
-    "pinia": "^3.0.4",
-    "vue": "^3.5.38",
-    "vue-router": "^5.1.0"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-vue": "^6.0.7",
-    "sass-embedded": "^1.100.0",
-    "vite": "^8.0.16",
-    "vue-tsc": "^3.3.5"
-  }
+    "name": "@wb/web",
+    "version": "2.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "type-check": "vue-tsc --noEmit"
+    },
+    "dependencies": {
+        "@wb/shared": "*",
+        "element-plus": "^2.14.2",
+        "pinia": "^3.0.4",
+        "vue": "^3.5.38",
+        "vue-router": "^5.1.0"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-vue": "^6.0.7",
+        "sass-embedded": "^1.100.0",
+        "vite": "^8.0.16",
+        "vite-plugin-vue-devtools": "^8.1.3",
+        "vue-tsc": "^3.3.5"
+    }
 }

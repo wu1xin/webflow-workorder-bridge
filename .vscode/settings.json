@@ -5,5 +5,26 @@
   // 相对路径的自动导入补全带上 .js 扩展名（NodeNext 要求）
   "js/ts.preferences.importModuleSpecifierEnding": "js",
   // 编辑器与命令行使用同一个工作区 TypeScript 版本
-  "js/ts.tsdk.path": "node_modules/typescript/lib"
+  "js/ts.tsdk.path": "node_modules/typescript/lib",
+
+  // ESLint：保存时用 ESLint 自动修复（省去手动右键/命令面板）
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  // 让 .vue 也被 ESLint 校验（默认只校验 js/ts）
+  "eslint.validate": ["javascript", "typescript", "vue"],
+
+  // JSON 缩进 4 空格（ESLint 不处理 JSON，交给编辑器格式化器）
+  "[json]": {
+    "editor.tabSize": 4,
+    "editor.detectIndentation": false
+  },
+  "[html]": {
+    "editor.tabSize": 4,
+    "editor.detectIndentation": false
+  },
+  "[jsonc]": {
+    "editor.tabSize": 4,
+    "editor.detectIndentation": false
+  }
 }

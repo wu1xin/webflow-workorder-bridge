@@ -5,47 +5,47 @@ const BASE = '/api'
 
 /** 接口错误：携带 HTTP 状态码与后端返回体 */
 export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-    public readonly body?: unknown,
-  ) {
-    super(message)
-    this.name = 'ApiError'
-  }
+    constructor(
+        public readonly status: number,
+        message: string,
+        public readonly body?: unknown,
+    ) {
+        super(message)
+        this.name = 'ApiError'
+    }
 }
 
 function safeParse(text: string): unknown {
-  if (!text) return undefined
-  try {
-    return JSON.parse(text)
-  } catch {
-    return text
-  }
+    if (!text) return undefined
+    try {
+        return JSON.parse(text)
+    } catch {
+        return text
+    }
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(`${BASE}${path}`, {
-      method,
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-  } catch (e) {
+    let res: Response
+    try {
+        res = await fetch(`${BASE}${path}`, {
+            method,
+            headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+            body: body !== undefined ? JSON.stringify(body) : undefined,
+        })
+    } catch (e) {
     // 网络层失败（后端未启动 / 不可达）
-    throw new ApiError(0, e instanceof Error ? e.message : '网络请求失败')
-  }
+        throw new ApiError(0, e instanceof Error ? e.message : '网络请求失败')
+    }
 
-  const data = safeParse(await res.text())
-  if (!res.ok) {
-    const msg =
-      data && typeof data === 'object' && 'error' in data
-        ? String((data as Record<string, unknown>).error)
-        : `请求失败（HTTP ${res.status}）`
-    throw new ApiError(res.status, msg, data)
-  }
-  return data as T
+    const data = safeParse(await res.text())
+    if (!res.ok) {
+        const msg =
+            data && typeof data === 'object' && 'error' in data
+                ? String((data as Record<string, unknown>).error)
+                : `请求失败（HTTP ${res.status}）`
+        throw new ApiError(res.status, msg, data)
+    }
+    return data as T
 }
 
 export const httpGet = <T>(path: string): Promise<T> => request<T>('GET', path)

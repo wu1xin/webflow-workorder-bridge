@@ -1,28 +1,42 @@
 <template>
-  <el-container class="app">
-    <el-aside width="220px" class="aside">
-      <div class="brand">
-        <img :src="logoUrl" alt="WeFlow 桥接" class="brand_logo" />
-        <span class="brand_name">WeFlow 桥接</span>
-      </div>
-      <el-scrollbar class="aside_scroll">
-        <el-menu :default-active="activeMenu" router>
-          <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
-            {{ m.label }}
-          </el-menu-item>
-        </el-menu>
-      </el-scrollbar>
-    </el-aside>
-    <el-container>
-      <el-main class="main">
-        <el-scrollbar>
-          <div class="main_inner">
-            <router-view />
-          </div>
-        </el-scrollbar>
-      </el-main>
+    <el-container class="app">
+        <el-aside
+            width="220px"
+            class="aside"
+        >
+            <div class="brand">
+                <img
+                    :src="logoUrl"
+                    alt="WeFlow 桥接"
+                    class="brand_logo"
+                />
+                <span class="brand_name">WeFlow 桥接</span>
+            </div>
+            <el-scrollbar class="aside_scroll">
+                <el-menu
+                    :default-active="activeMenu"
+                    router
+                >
+                    <el-menu-item
+                        v-for="m in menus"
+                        :key="m.path"
+                        :index="m.path"
+                    >
+                        {{ m.label }}
+                    </el-menu-item>
+                </el-menu>
+            </el-scrollbar>
+        </el-aside>
+        <el-container>
+            <el-main class="main">
+                <el-scrollbar>
+                    <div class="main_inner">
+                        <router-view />
+                    </div>
+                </el-scrollbar>
+            </el-main>
+        </el-container>
     </el-container>
-  </el-container>
 </template>
 
 <script setup lang="ts">
@@ -34,11 +48,11 @@ const route = useRoute()
 const activeMenu = computed(() => route.path)
 
 const menus = [
-  { path: '/', label: '总览/状态' },
-  { path: '/config', label: '配置' },
-  { path: '/test', label: '测试与诊断' },
-  { path: '/logs', label: '日志/审计' },
-  { path: '/dlq', label: '死信队列' },
+    { path: '/', label: '总览/状态' },
+    { path: '/config', label: '配置' },
+    { path: '/test', label: '测试与诊断' },
+    { path: '/logs', label: '日志/审计' },
+    { path: '/dlq', label: '死信队列' },
 ]
 </script>
 
