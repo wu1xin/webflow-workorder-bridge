@@ -304,7 +304,7 @@ CREATE TABLE IF NOT EXISTS media_cache (
 | 分类 | 接口 | 说明 |
 |---|---|---|
 | 配置 | `GET /api/config` | 读配置（敏感字段掩码） |
-| | `PUT /api/config` | 保存（校验 + 触发热重连） |
+| | `PUT /api/config/weflow` | 保存 WeFlow 配置（校验 + 触发热重连）；各模块独立保存接口 |
 | | `POST /api/config/export`、`POST /api/config/import` | 导入导出（脱敏） |
 | 状态 | `GET /api/status` | 状态快照：SSE态/WeFlow health/断点/积压/死信数/统计/运行时长 |
 | 实时 | `GET /api/stream/status`、`GET /api/stream/logs` | **SSE 推**实时状态/日志 |

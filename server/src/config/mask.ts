@@ -16,7 +16,6 @@ export function maskWeflowConfig(cfg: WeflowConfig): WeflowConfig {
     return {
         ...cfg,
         accessToken: maskToken(cfg.accessToken),
-        reconnect: { ...cfg.reconnect },
     }
 }
 

@@ -222,7 +222,7 @@ export class WeflowConnectionManager extends EventEmitter {
         this.logWindowStart = nowSec()
         this.logWindowAttempts = 0
         const reconnect: ReconnectProgress = {
-            intervalSec: this.cfg().reconnect.intervalSec,
+            intervalSec: this.cfg().reconnectIntervalSec,
             attempts: 0,
             since: nowSec(),
         }
@@ -236,7 +236,7 @@ export class WeflowConnectionManager extends EventEmitter {
     }
 
     private scheduleReconnectAttempt(epoch: number): void {
-        const delayMs = this.cfg().reconnect.intervalSec * 1000
+        const delayMs = this.cfg().reconnectIntervalSec * 1000
         this.reconnectTimer = setTimeout(() => {
             void this.runReconnectAttempt(epoch)
         }, delayMs)
@@ -280,7 +280,7 @@ export class WeflowConnectionManager extends EventEmitter {
     /** 每 logIntervalSec 汇总一条「重连测试」日志（§4） */
     private maybeLogReconnectWindow(latest: GateResult): void {
         const elapsed = nowSec() - this.logWindowStart
-        if (elapsed < this.cfg().reconnect.logIntervalSec) return
+        if (elapsed < this.cfg().reconnectLogIntervalSec) return
         this.log.warn(
             {
                 windowSec: elapsed,

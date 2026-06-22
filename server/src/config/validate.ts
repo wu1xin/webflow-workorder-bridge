@@ -3,7 +3,7 @@
 import { WEFLOW_LIMITS } from '@wb/shared/constants'
 import type { WeflowConfigUpdate } from '@wb/shared/types'
 
-/** 字段级校验错误：key 为字段路径（如 reconnect.intervalSec） */
+/** 字段级校验错误：key 为字段路径（如 reconnectIntervalSec） */
 export type FieldErrors = Record<string, string>
 
 export interface ValidationResult {
@@ -65,13 +65,8 @@ export function validateWeflowUpdate(
     checkIntRange(errors, 'readTimeoutSec', update.readTimeoutSec, WEFLOW_LIMITS.readTimeoutSec, '读超时')
     checkIntRange(errors, 'firstMessageTimeoutSec', update.firstMessageTimeoutSec, WEFLOW_LIMITS.firstMessageTimeoutSec, '首消息窗口')
     checkIntRange(errors, 'healthIntervalSec', update.healthIntervalSec, WEFLOW_LIMITS.healthIntervalSec, '探活间隔')
-
-    if (typeof update.reconnect !== 'object' || update.reconnect === null) {
-        errors.reconnect = '重连配置缺失'
-    } else {
-        checkIntRange(errors, 'reconnect.intervalSec', update.reconnect.intervalSec, WEFLOW_LIMITS.reconnect.intervalSec, '重连间隔')
-        checkIntRange(errors, 'reconnect.logIntervalSec', update.reconnect.logIntervalSec, WEFLOW_LIMITS.reconnect.logIntervalSec, '重连日志周期')
-    }
+    checkIntRange(errors, 'reconnectIntervalSec', update.reconnectIntervalSec, WEFLOW_LIMITS.reconnectIntervalSec, '重连间隔')
+    checkIntRange(errors, 'reconnectLogIntervalSec', update.reconnectLogIntervalSec, WEFLOW_LIMITS.reconnectLogIntervalSec, '重连日志周期')
 
     // accessToken：null/undefined = 保持不变（须已有 Token）；否则非空（trim 后）
     const token = update.accessToken

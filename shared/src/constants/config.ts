@@ -21,10 +21,8 @@ export const DEFAULT_WEFLOW_CONFIG: WeflowConfig = {
     readTimeoutSec: 60,
     firstMessageTimeoutSec: 3,
     healthIntervalSec: 30,
-    reconnect: {
-        intervalSec: 1,
-        logIntervalSec: 30,
-    },
+    reconnectIntervalSec: 1,
+    reconnectLogIntervalSec: 30,
 }
 
 /** WeFlow 数值字段校验边界（与配置说明 §6 一致） */
@@ -34,8 +32,25 @@ export const WEFLOW_LIMITS = {
     readTimeoutSec: { min: 10, max: 600 },
     firstMessageTimeoutSec: { min: 1, max: 30 },
     healthIntervalSec: { min: 5, max: 600 },
-    reconnect: {
-        intervalSec: { min: 1, max: 60 },
-        logIntervalSec: { min: 10, max: 300 },
-    },
+    reconnectIntervalSec: { min: 1, max: 60 },
+    reconnectLogIntervalSec: { min: 10, max: 300 },
 } as const
+
+/** WeFlow 连接测试诊断结论 */
+export const WeflowConnectStatus = {
+    /** health + SSE + 首条事件均正常 */
+    ok: 'ok',
+    /** health 不通：WeFlow 未启动 / 未开 API 服务 / 端口错 */
+    weflow_not_ready: 'weflow_not_ready',
+    /** health 通但 SSE 鉴权被拒：Token 错或过期 */
+    token_invalid: 'token_invalid',
+    /** SSE 连上但久无数据：多半未开「主动推送」 */
+    connected_no_push: 'connected_no_push',
+    /** 其它错误 */
+    error: 'error',
+    /** 未配置 */
+    noConfig: 'noConfig',
+} as const
+
+/** WeFlow 连接测试诊断结论 */
+export type WeflowConnectStatus = typeof WeflowConnectStatus[keyof typeof WeflowConnectStatus]

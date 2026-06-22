@@ -18,7 +18,8 @@ function resolveConfigForTest(ctx: AppContext, update: WeflowConfigUpdate): Wefl
         readTimeoutSec: update.readTimeoutSec,
         firstMessageTimeoutSec: update.firstMessageTimeoutSec,
         healthIntervalSec: update.healthIntervalSec,
-        reconnect: { ...update.reconnect },
+        reconnectIntervalSec: update.reconnectIntervalSec,
+        reconnectLogIntervalSec: update.reconnectLogIntervalSec,
     }
 }
 

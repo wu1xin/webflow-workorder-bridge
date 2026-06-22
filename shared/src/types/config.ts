@@ -1,18 +1,6 @@
 // 应用配置类型（前后端共用）。首版仅落地 WeFlow 上游分组，其余分组后续补充。
 // 字段含义与约束见 docs/config/weflow-配置说明.md
 
-/**
- * WeFlow 断线后的自动重连循环（固定间隔，不退避、不限次，直到连回）。
- * 循环每轮重跑「三级连接判定闸门」(health → SSE → 首消息)，见
- * docs/weflow-链路连接逻辑（仅上游）.md §4。
- */
-export interface WeflowReconnectConfig {
-    /** 自动重连每轮间隔（秒，固定不退避），默认 1 */
-    intervalSec: number
-    /** 重连测试日志的汇总周期（秒）：每段记录该时间内的测试次数与过程，默认 30 */
-    logIntervalSec: number
-}
-
 /** WeFlow（上游）接入配置 */
 export interface WeflowConfig {
     /** WeFlow API 主机，默认 127.0.0.1 */
@@ -36,8 +24,14 @@ export interface WeflowConfig {
     firstMessageTimeoutSec: number
     /** health 周期探活间隔（秒），默认 30 */
     healthIntervalSec: number
-    /** 断线后自动重连循环参数 */
-    reconnect: WeflowReconnectConfig
+    /**
+   * 断线后自动重连循环每轮间隔（秒，固定不退避、不限次，直到连回），默认 1。
+   * 循环每轮重跑「三级连接判定闸门」(health → SSE → 首消息)，见
+   * docs/weflow-链路连接逻辑（仅上游）.md §4。
+   */
+    reconnectIntervalSec: number
+    /** 重连测试日志的汇总周期（秒）：每段记录该时间内的测试次数与过程，默认 30 */
+    reconnectLogIntervalSec: number
 }
 
 /**
@@ -49,14 +43,9 @@ export type WeflowConfigUpdate = Omit<WeflowConfig, 'accessToken'> & {
     accessToken?: string | null
 }
 
-/** 应用整体配置（分组聚合，首版仅 weflow） */
+/** 应用整体配置（分组聚合，首版仅 weflow）。读取走 GET /api/config；保存按模块拆分（如 PUT /api/config/weflow） */
 export interface AppConfig {
-    weflow: WeflowConfig
-}
-
-/** 应用整体配置更新负载 */
-export interface AppConfigUpdate {
-    weflow: WeflowConfigUpdate
+    weflow?: WeflowConfig
 }
 
 /** WeFlow 连接测试诊断结论 */

@@ -29,10 +29,8 @@ function withWeflowDefaults(partial: Partial<WeflowConfig> | undefined): WeflowC
         readTimeoutSec: typeof p.readTimeoutSec === 'number' ? p.readTimeoutSec : d.readTimeoutSec,
         firstMessageTimeoutSec: typeof p.firstMessageTimeoutSec === 'number' ? p.firstMessageTimeoutSec : d.firstMessageTimeoutSec,
         healthIntervalSec: typeof p.healthIntervalSec === 'number' ? p.healthIntervalSec : d.healthIntervalSec,
-        reconnect: {
-            intervalSec: p.reconnect?.intervalSec ?? d.reconnect.intervalSec,
-            logIntervalSec: p.reconnect?.logIntervalSec ?? d.reconnect.logIntervalSec,
-        },
+        reconnectIntervalSec: typeof p.reconnectIntervalSec === 'number' ? p.reconnectIntervalSec : d.reconnectIntervalSec,
+        reconnectLogIntervalSec: typeof p.reconnectLogIntervalSec === 'number' ? p.reconnectLogIntervalSec : d.reconnectLogIntervalSec,
     }
 }
 
@@ -130,7 +128,8 @@ export class ConfigStore {
                 readTimeoutSec: update.readTimeoutSec,
                 firstMessageTimeoutSec: update.firstMessageTimeoutSec,
                 healthIntervalSec: update.healthIntervalSec,
-                reconnect: { ...update.reconnect },
+                reconnectIntervalSec: update.reconnectIntervalSec,
+                reconnectLogIntervalSec: update.reconnectLogIntervalSec,
             },
         }
 
