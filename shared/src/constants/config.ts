@@ -19,13 +19,11 @@ export const DEFAULT_WEFLOW_CONFIG: WeflowConfig = {
   accessToken: '',
   connectTimeoutSec: 10,
   readTimeoutSec: 60,
+  firstMessageTimeoutSec: 3,
   healthIntervalSec: 30,
   reconnect: {
-    initialDelaySec: 1,
-    maxDelaySec: 30,
-    factor: 2,
-    maxRetries: 0,
-    jitter: true,
+    intervalSec: 1,
+    logIntervalSec: 30,
   },
 }
 
@@ -34,24 +32,10 @@ export const WEFLOW_LIMITS = {
   port: { min: 1, max: 65535 },
   connectTimeoutSec: { min: 1, max: 120 },
   readTimeoutSec: { min: 10, max: 600 },
+  firstMessageTimeoutSec: { min: 1, max: 30 },
   healthIntervalSec: { min: 5, max: 600 },
   reconnect: {
-    initialDelaySec: { min: 1, max: 60 },
-    maxDelaySec: { min: 1, max: 3600 },
-    factor: { min: 1, max: 10 },
-    maxRetries: { min: 0, max: Number.MAX_SAFE_INTEGER },
+    intervalSec: { min: 1, max: 60 },
+    logIntervalSec: { min: 10, max: 300 },
   },
 } as const
-
-
-  host: '127.0.0.1',
-  port: 5031,
-  accessToken: '',
-  firstConnectTimeoutSec: 10, // 第一次连接超时（秒），超时直接报错
-  连接成功后
-
-  连接断开，
-  超过一定时间没有收到数据则判定为假死，
-  
-  
-  

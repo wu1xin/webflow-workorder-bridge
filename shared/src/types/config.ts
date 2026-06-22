@@ -1,18 +1,16 @@
 // 应用配置类型（前后端共用）。首版仅落地 WeFlow 上游分组，其余分组后续补充。
 // 字段含义与约束见 docs/config/weflow-配置说明.md
 
-/** WeFlow 断线重连退避（指数退避 + 上限封顶） */
+/**
+ * WeFlow 断线后的自动重连循环（固定间隔，不退避、不限次，直到连回）。
+ * 循环每轮重跑「三级连接判定闸门」(health → SSE → 首消息)，见
+ * docs/weflow-链路连接逻辑（仅上游）.md §4。
+ */
 export interface WeflowReconnectConfig {
-  /** 重连起始退避（秒），默认 1 */
-  initialDelaySec: number
-  /** 重连退避上限（秒），默认 30；到顶后维持该间隔 */
-  maxDelaySec: number
-  /** 退避倍数，默认 2 */
-  factor: number
-  /** 最大连续重连次数，默认 0 = 无限 */
-  maxRetries: number
-  /** 退避抖动（±20%），默认 true */
-  jitter: boolean
+  /** 自动重连每轮间隔（秒，固定不退避），默认 1 */
+  intervalSec: number
+  /** 重连测试日志的汇总周期（秒）：每段记录该时间内的测试次数与过程，默认 30 */
+  logIntervalSec: number
 }
 
 /** WeFlow（上游）接入配置 */
@@ -29,11 +27,16 @@ export interface WeflowConfig {
   accessToken: string
   /** 连接超时（秒），默认 10 */
   connectTimeoutSec: number
-  /** 读超时 / 探活窗口（秒），默认 60 */
+  /** 读超时 / 探活窗口（秒）：接收窗口内无数据即判为疑似掉线，触发最终判断，默认 60 */
   readTimeoutSec: number
+  /**
+   * SSE 连上后等待「首个连接成功消息」的窗口（秒）。
+   * 超时未收到则判为「SSE 连接成功但无消息」（connected_no_push），默认 3。
+   */
+  firstMessageTimeoutSec: number
   /** health 周期探活间隔（秒），默认 30 */
   healthIntervalSec: number
-  /** 断线重连退避 */
+  /** 断线后自动重连循环参数 */
   reconnect: WeflowReconnectConfig
 }
 

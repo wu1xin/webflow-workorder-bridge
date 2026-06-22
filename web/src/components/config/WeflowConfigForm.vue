@@ -51,6 +51,19 @@
           controls-position="right"
         />
       </el-form-item>
+      <el-form-item label="首消息窗口（秒）" prop="firstMessageTimeoutSec">
+        <el-input-number
+          v-model="form.firstMessageTimeoutSec"
+          :min="limits.firstMessageTimeoutSec.min"
+          :max="limits.firstMessageTimeoutSec.max"
+          :step="1"
+          :precision="0"
+          controls-position="right"
+        />
+        <div class="weflow_form__hint">
+          SSE 连上后等待「首个连接成功消息」的时限；超时判为「连接成功但无消息」。
+        </div>
+      </el-form-item>
       <el-form-item label="探活间隔（秒）" prop="healthIntervalSec">
         <el-input-number
           v-model="form.healthIntervalSec"
@@ -61,56 +74,30 @@
           controls-position="right"
         />
       </el-form-item>
-      <el-form-item label="起始退避（秒）" prop="reconnect.initialDelaySec">
+      <el-form-item label="重连间隔（秒）" prop="reconnect.intervalSec">
         <el-input-number
-          v-model="form.reconnect.initialDelaySec"
-          :min="limits.reconnect.initialDelaySec.min"
-          :max="limits.reconnect.initialDelaySec.max"
+          v-model="form.reconnect.intervalSec"
+          :min="limits.reconnect.intervalSec.min"
+          :max="limits.reconnect.intervalSec.max"
           :step="1"
           :precision="0"
           controls-position="right"
         />
+        <div class="weflow_form__hint">
+          断线后自动重连循环每轮间隔，固定不退避；无限重试直到连回。
+        </div>
       </el-form-item>
-      <el-form-item label="退避上限（秒）" prop="reconnect.maxDelaySec">
+
+      <el-form-item label="重连日志周期（秒）" prop="reconnect.logIntervalSec">
         <el-input-number
-          v-model="form.reconnect.maxDelaySec"
-          :min="limits.reconnect.maxDelaySec.min"
-          :max="limits.reconnect.maxDelaySec.max"
-          :step="1"
+          v-model="form.reconnect.logIntervalSec"
+          :min="limits.reconnect.logIntervalSec.min"
+          :max="limits.reconnect.logIntervalSec.max"
+          :step="5"
           :precision="0"
           controls-position="right"
         />
-      </el-form-item>
-
-      <el-form-item label="退避倍数" prop="reconnect.factor">
-        <el-input-number
-          v-model="form.reconnect.factor"
-          :min="limits.reconnect.factor.min"
-          :max="limits.reconnect.factor.max"
-          :step="0.5"
-          :precision="1"
-          controls-position="right"
-        />
-      </el-form-item>
-
-      <el-form-item label="最大重连次数" prop="reconnect.maxRetries">
-        <el-input-number
-          v-model="form.reconnect.maxRetries"
-          :min="limits.reconnect.maxRetries.min"
-          :step="1"
-          :precision="0"
-          controls-position="right"
-        />
-        <div class="weflow_form__hint">0 = 无限重连。</div>
-      </el-form-item>
-
-      <el-form-item label="退避抖动" prop="reconnect.jitter">
-        <el-switch v-model="form.reconnect.jitter" />
-        <div class="weflow_form__hint">在退避值上叠加 ±20% 随机，避免固定节奏。</div>
-      </el-form-item>
-
-      <el-form-item label="退避节奏预览">
-        <el-text type="info">{{ backoffPreview }}</el-text>
+        <div class="weflow_form__hint">每段汇总一条重连测试日志，记录该时间内的测试次数与过程。</div>
       </el-form-item>
 
       <el-divider content-position="left">固定接口路径（不可配）</el-divider>
@@ -151,8 +138,9 @@ const form = reactive<WeflowConfig>({
   accessToken: '',
   connectTimeoutSec: 10,
   readTimeoutSec: 60,
+  firstMessageTimeoutSec: 3,
   healthIntervalSec: 30,
-  reconnect: { initialDelaySec: 1, maxDelaySec: 30, factor: 2, maxRetries: 0, jitter: true },
+  reconnect: { intervalSec: 1, logIntervalSec: 30 },
 })
 
 /** 用 store 快照重置表单（token 输入清空，仅靠 placeholder 提示已配置） */
@@ -163,12 +151,10 @@ function resetFromStore(): void {
   form.accessToken = ''
   form.connectTimeoutSec = c.connectTimeoutSec
   form.readTimeoutSec = c.readTimeoutSec
+  form.firstMessageTimeoutSec = c.firstMessageTimeoutSec
   form.healthIntervalSec = c.healthIntervalSec
-  form.reconnect.initialDelaySec = c.reconnect.initialDelaySec
-  form.reconnect.maxDelaySec = c.reconnect.maxDelaySec
-  form.reconnect.factor = c.reconnect.factor
-  form.reconnect.maxRetries = c.reconnect.maxRetries
-  form.reconnect.jitter = c.reconnect.jitter
+  form.reconnect.intervalSec = c.reconnect.intervalSec
+  form.reconnect.logIntervalSec = c.reconnect.logIntervalSec
 }
 
 // store 快照变化（加载完成 / 保存后整体替换）时同步到表单
@@ -179,17 +165,6 @@ const tokenPlaceholder = computed(() =>
     ? `已配置（${store.weflow.accessToken}），留空则不修改`
     : '请输入 WeFlow Access Token',
 )
-
-const backoffPreview = computed(() => {
-  const { initialDelaySec, maxDelaySec, factor } = form.reconnect
-  const seq: number[] = []
-  let d = initialDelaySec
-  for (let i = 0; i < 6; i++) {
-    seq.push(Math.min(maxDelaySec, Math.round(d)))
-    d *= factor
-  }
-  return `${seq.join('s → ')}s …（成功后归零；0 次=无限重连）`
-})
 
 const formRef = useTemplateRef<FormInstance>('formRef')
 
@@ -208,18 +183,6 @@ const rules: FormRules = {
       trigger: 'blur',
     },
   ],
-  'reconnect.maxDelaySec': [
-    {
-      validator: (_rule: unknown, value: unknown, callback: (e?: Error) => void) => {
-        if (Number(value) < form.reconnect.initialDelaySec) {
-          callback(new Error('退避上限需 ≥ 起始退避'))
-        } else {
-          callback()
-        }
-      },
-      trigger: 'change',
-    },
-  ],
 }
 
 /** 把表单组装成更新负载：token 为空表示保持不变（置 null） */
@@ -230,6 +193,7 @@ function buildUpdate(): WeflowConfigUpdate {
     port: form.port,
     connectTimeoutSec: form.connectTimeoutSec,
     readTimeoutSec: form.readTimeoutSec,
+    firstMessageTimeoutSec: form.firstMessageTimeoutSec,
     healthIntervalSec: form.healthIntervalSec,
     reconnect: { ...form.reconnect },
     accessToken: token ? token : null,
