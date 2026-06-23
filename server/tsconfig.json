@@ -15,5 +15,6 @@
     "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"],
   "references": [{ "path": "../shared" }]
 }

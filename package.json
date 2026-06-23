@@ -17,7 +17,8 @@
         "build": "npm -w server run build && npm -w web run build",
         "start": "npm -w server run start",
         "lint": "eslint .",
-        "lint:fix": "eslint . --fix"
+        "lint:fix": "eslint . --fix",
+        "test": "npm -w server run test"
     },
     "devDependencies": {
         "@stylistic/eslint-plugin": "^5.10.0",
