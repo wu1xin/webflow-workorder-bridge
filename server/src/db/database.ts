@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { appDataDir } from '../config/paths.js'
 import { migrate } from './schema.js'
 import { MetaStore } from './meta.js'
+import { ChannelStateStore } from './channelState.js'
 import { DedupStore } from './dedup.js'
 import { QueueStore } from './queue.js'
 
@@ -18,12 +19,14 @@ export function dbFilePath(): string {
 export class Db {
     readonly raw: BetterSqlite3.Database
     readonly meta: MetaStore
+    readonly channelState: ChannelStateStore
     readonly dedup: DedupStore
     readonly queue: QueueStore
 
     private constructor(raw: BetterSqlite3.Database) {
         this.raw = raw
         this.meta = new MetaStore(raw)
+        this.channelState = new ChannelStateStore(raw)
         this.dedup = new DedupStore(raw)
         this.queue = new QueueStore(raw)
     }
@@ -33,6 +36,14 @@ export class Db {
         mkdirSync(appDataDir(), { recursive: true })
         const raw = new BetterSqlite3(file)
         raw.pragma('journal_mode = WAL')
+        raw.pragma('foreign_keys = ON')
+        migrate(raw)
+        return new Db(raw)
+    }
+
+    /** 打开内存库（测试用）：跳过建目录与 WAL，仅开外键 + 迁移 */
+    static openMemory(): Db {
+        const raw = new BetterSqlite3(':memory:')
         raw.pragma('foreign_keys = ON')
         migrate(raw)
         return new Db(raw)
