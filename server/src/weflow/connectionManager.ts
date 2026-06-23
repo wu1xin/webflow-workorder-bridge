@@ -107,7 +107,7 @@ export class WeflowConnectionManager extends EventEmitter {
     }
 
     private cfg(): WeflowConfig {
-        return this.store.get().weflow
+        return this.store.getWeflow()
     }
 
     /**

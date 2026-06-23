@@ -21,5 +21,5 @@ export function maskWeflowConfig(cfg: WeflowConfig): WeflowConfig {
 
 /** 返回掩码后的应用配置副本 */
 export function maskAppConfig(cfg: AppConfig): AppConfig {
-    return { weflow: maskWeflowConfig(cfg.weflow) }
+    return { weflow: cfg.weflow ? maskWeflowConfig(cfg.weflow) : undefined }
 }

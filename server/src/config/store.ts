@@ -50,7 +50,7 @@ function decodeFromDisk(raw: unknown): AppConfig {
 
 /** 序列化为落盘 JSON：accessToken 替换为加密信封（非空时）。 */
 function encodeForDisk(cfg: AppConfig): unknown {
-    const { accessToken, ...rest } = cfg.weflow
+    const { accessToken, ...rest } = withWeflowDefaults(cfg.weflow)
     return {
         weflow: {
             ...rest,
@@ -86,6 +86,11 @@ export class ConfigStore {
         return this.config
     }
 
+    /** 当前 WeFlow 配置（含明文 Token）；缺失时回退默认值，保证非空 */
+    getWeflow(): WeflowConfig {
+        return withWeflowDefaults(this.config.weflow)
+    }
+
     /** 掩码后的配置，供 GET /api/config 返回 */
     getMasked(): AppConfig {
         return maskAppConfig(this.config)
@@ -93,13 +98,13 @@ export class ConfigStore {
 
     /** 是否已配置可用 Token */
     hasToken(): boolean {
-        return Boolean(this.config.weflow.accessToken)
+        return Boolean(this.config.weflow?.accessToken)
     }
 
     /** 是否已具备建链所需的最小配置（host/port/token 齐全） */
     isConnectable(): boolean {
         const w = this.config.weflow
-        return Boolean(w.host) && Boolean(w.port) && Boolean(w.accessToken)
+        return Boolean(w?.host) && Boolean(w?.port) && Boolean(w?.accessToken)
     }
 
     /**
@@ -116,7 +121,7 @@ export class ConfigStore {
 
         const token = update.accessToken
         const nextToken = token === null || token === undefined
-            ? this.config.weflow.accessToken
+            ? this.config.weflow?.accessToken ?? ''
             : token.trim()
 
         const next: AppConfig = {

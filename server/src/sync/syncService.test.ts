@@ -15,7 +15,10 @@ function stubClient(sessions: WeflowSession[], pages: Record<string, MessagesPag
 function deps(db: Db, client: ReturnType<typeof stubClient>) {
     const noopLog = { info() {}, warn() {}, error() {}, debug() {} } as never
     return {
-        store: { get: () => ({ weflow: { host: 'h', port: 1, accessToken: 't' } }) } as never,
+        store: {
+            get: () => ({ weflow: { host: 'h', port: 1, accessToken: 't' } }),
+            getWeflow: () => ({ host: 'h', port: 1, accessToken: 't' }),
+        } as never,
         db,
         log: noopLog,
         alert: { send() {} },

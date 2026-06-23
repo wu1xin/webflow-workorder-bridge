@@ -8,7 +8,7 @@ import type { AppContext } from './context.js'
 
 /** 把待测更新负载与现状合成完整配置：accessToken 缺省时沿用已存 Token */
 function resolveConfigForTest(ctx: AppContext, update: WeflowConfigUpdate): WeflowConfig {
-    const current = ctx.store.get().weflow
+    const current = ctx.store.getWeflow()
     const token = update.accessToken
     return {
         host: update.host.trim(),
