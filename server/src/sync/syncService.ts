@@ -220,7 +220,7 @@ export class SyncService implements SyncCoordinator {
     }
 
     private cfg(): WeflowConfig {
-        return this.store.get().weflow
+        return this.store.getWeflow()
     }
 
     /** 开始一轮同步：置忙 + 重置计数。返回 false 表示已有同步在跑。 */

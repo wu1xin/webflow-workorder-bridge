@@ -1,7 +1,8 @@
 // 轻量 fetch 封装：统一前缀、JSON 收发、错误归一化。
 // 开发期经 Vite 代理 /api → localhost:8787；生产期同源。
 
-const BASE = '/api'
+/** 接口统一前缀；EventSource 等非 fetch 调用也复用它拼地址 */
+export const BASE = '/api'
 
 /** 接口错误：携带 HTTP 状态码与后端返回体 */
 export class ApiError extends Error {

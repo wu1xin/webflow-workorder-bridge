@@ -6,9 +6,17 @@
         <template #header>
             <div class="weflow-config-header">
                 <span>上游（WeFlow）</span>
-                <el-tag :type="weflowStatus.type">
-                    {{ weflowStatus.text }}
-                </el-tag>
+                <div class="weflow-config-status">
+                    <el-tag :type="connectionTag.type">
+                        {{ connectionTag.text }}
+                    </el-tag>
+                    <span
+                        v-if="lastConnectedText"
+                        class="weflow-config-status-time"
+                    >
+                        {{ lastConnectedText }}
+                    </span>
+                </div>
             </div>
         </template>
         <ElForm
@@ -168,17 +176,19 @@ import { ApiError } from '@/api/http'
 import { computed, ref, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { WEFLOW_LIMITS } from '@wb/shared/constants'
-import { WeflowConnectStatus } from '@wb/shared/constants/config'
-import { type WeflowConfig, type WeflowConfigUpdate } from '@wb/shared/types'
+import { type WeflowConfig, type WeflowConfigUpdate, type WeflowConnectionState } from '@wb/shared/types'
 import { ElCard, ElForm, ElFormItem, ElButton, ElInputNumber, ElInput, ElMessage, type FormInstance, type FormRules } from 'element-plus'
 
-const WorkerStatusMap: Record<WeflowConnectStatus, { type: string, text: string }> = {
-    [WeflowConnectStatus.ok]: { type: 'success', text: '连接正常' },
-    [WeflowConnectStatus.weflow_not_ready]: { type: 'error', text: 'WeFlow 未就绪（未启动 / 未开 API 服务 / 端口错）' },
-    [WeflowConnectStatus.token_invalid]: { type: 'error', text: 'Token 鉴权失败（Token 错或过期）' },
-    [WeflowConnectStatus.connected_no_push]: { type: 'warning', text: '已连接但无推送（多半未开「主动推送」）' },
-    [WeflowConnectStatus.error]: { type: 'error', text: '连接测试失败' },
-    [WeflowConnectStatus.noConfig]: { type: 'info', text: '未配置' },
+type TagType = 'primary' | 'success' | 'info' | 'warning' | 'danger'
+
+/** 运行期连接状态 → 标签颜色/文案（数据源为 store.connectionStatus，经 SSE 实时驱动） */
+const STATE_TAG_MAP: Record<WeflowConnectionState, { type: TagType, text: string }> = {
+    unconfigured: { type: 'info', text: '未配置' },
+    connecting: { type: 'primary', text: '连接中…' },
+    connected: { type: 'success', text: '已连接 · 接收中' },
+    weflowNotReady: { type: 'warning', text: 'WeFlow 未就绪' },
+    reconnecting: { type: 'warning', text: '自动重连中' },
+    disconnected: { type: 'danger', text: '连接失败' },
 } as const
 
 const store = useConfigStore()
@@ -225,9 +235,21 @@ const weflowForm = ref({
     saving: false,
 })
 
-/** 计算 weflow 连接状态 */
-const weflowStatus = computed(() => {
-    return WorkerStatusMap[store.weflowStatus]
+/** 连接状态标签：颜色固定映射，reconnecting 时追加本段重连次数 */
+const connectionTag = computed(() => {
+    const status = store.connectionStatus
+    const base = STATE_TAG_MAP[status.state]
+    const text = status.state === 'reconnecting' && status.reconnect
+        ? `${base.text} · 第 ${status.reconnect.attempts} 次`
+        : base.text
+    return { type: base.type, text }
+})
+
+/** 已连接态下展示最近一次成功连接时刻 */
+const lastConnectedText = computed(() => {
+    const { state, lastConnectedAt } = store.connectionStatus
+    if (state !== 'connected' || !lastConnectedAt) return ''
+    return `最近连接 ${new Date(lastConnectedAt * 1000).toLocaleTimeString('zh-CN', { hour12: false })}`
 })
 
 /** 是否已配置 Access Token */
@@ -308,6 +330,16 @@ function onClickSave() {
         display: flex;
         align-items: center;
         justify-content: space-between;
+    }
+    .weflow-config-status {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+    }
+    .weflow-config-status-time {
+        font-size: 12px;
+        color: var(--el-text-color-secondary);
     }
 }
 </style>
