@@ -7,8 +7,8 @@
 import type { ConfigStore } from '../config/store.js'
 import type { WeflowConfig } from '@wb/shared/types'
 import type { Db } from '../db/database.js'
-import { META_KEYS } from '../db/meta.js'
-import { WeflowRestClient, type WeflowMessage } from '../weflow/restClient.js'
+import { WeflowRestClient, type WeflowMessage, type WeflowSession, type MessagesPage } from '../weflow/restClient.js'
+import { WeflowAdapter, WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM } from '../weflow/adapter.js'
 import type { AlertChannel, SyncCoordinator, SyncReason } from '../weflow/hooks.js'
 import type { Logger } from '../weflow/logger.js'
 import { idleProgress, type SyncProgress } from './types.js'
@@ -22,11 +22,19 @@ function nowSec(): number {
     return Math.floor(Date.now() / 1000)
 }
 
+/** 同步所需的 WeFlow 拉取能力（便于测试注入桩） */
+export interface WeflowClientLike {
+    listSessions(): Promise<WeflowSession[]>
+    fetchMessagesPage(talker: string, start: number, offset: number, limit?: number): Promise<MessagesPage>
+}
+
 export interface SyncServiceDeps {
     store: ConfigStore
     db: Db
     log: Logger
     alert: AlertChannel
+    /** client 工厂，默认 new WeflowRestClient(cfg)；测试可注入桩 */
+    createClient?: (cfg: WeflowConfig) => WeflowClientLike
 }
 
 export class SyncService implements SyncCoordinator {
@@ -34,6 +42,8 @@ export class SyncService implements SyncCoordinator {
     private readonly db: Db
     private readonly log: Logger
     private readonly alert: AlertChannel
+    private readonly adapter = new WeflowAdapter()
+    private readonly createClient: (cfg: WeflowConfig) => WeflowClientLike
 
     private progress: SyncProgress = idleProgress()
 
@@ -42,6 +52,7 @@ export class SyncService implements SyncCoordinator {
         this.db = deps.db
         this.log = deps.log
         this.alert = deps.alert
+        this.createClient = deps.createClient ?? ((cfg) => new WeflowRestClient(cfg))
     }
 
     /** 当前同步进度快照 */
@@ -55,7 +66,7 @@ export class SyncService implements SyncCoordinator {
             this.log.warn('[sync] 已有同步在进行，跳过本次触发')
             return
         }
-        const installed = this.db.meta.get(META_KEYS.installTime) !== null
+        const installed = this.db.channelState.getInstallTime(WEFLOW_CHANNEL_ID) !== null
         if (reason === 'initial' && !installed) {
             void this.runFullSync()
         } else {
@@ -77,13 +88,13 @@ export class SyncService implements SyncCoordinator {
     }
 
     // ── 全量同步（首装） ─────────────────────────────────────────────
-    private async runFullSync(): Promise<void> {
+    async runFullSync(): Promise<void> {
         if (!this.begin('full', null)) return
         const cfg = this.cfg()
-        const client = new WeflowRestClient(cfg)
+        const client = this.createClient(cfg)
         try {
-            if (this.db.meta.get(META_KEYS.installTime) === null) {
-                this.db.meta.set(META_KEYS.installTime, nowSec())
+            if (this.db.channelState.getInstallTime(WEFLOW_CHANNEL_ID) === null) {
+                this.db.channelState.markInstalled(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, nowSec())
             }
             this.log.info('[sync] 开始全量同步（首装，拉取 WeFlow 全部历史）')
             const sessions = await client.listSessions()
@@ -102,11 +113,11 @@ export class SyncService implements SyncCoordinator {
     }
 
     // ── 补偿同步（重连/重启） ────────────────────────────────────────
-    private async runCompensation(sinceOverride?: number): Promise<void> {
+    async runCompensation(sinceOverride?: number): Promise<void> {
         const cfg = this.cfg()
         let start = sinceOverride
-            ?? this.db.meta.getNumber(META_KEYS.lastSyncTimestamp)
-            ?? this.db.meta.getNumber(META_KEYS.installTime)
+            ?? this.db.channelState.get(WEFLOW_CHANNEL_ID)?.lastSyncTimestamp
+            ?? this.db.channelState.getInstallTime(WEFLOW_CHANNEL_ID)
             ?? nowSec()
 
         // 回溯上限：离线过久则截断起点并告警，不静默拉全量（FR-SYNC-04）
@@ -122,7 +133,7 @@ export class SyncService implements SyncCoordinator {
         }
 
         if (!this.begin('compensation', start)) return
-        const client = new WeflowRestClient(cfg)
+        const client = this.createClient(cfg)
         try {
             this.log.info({ since: start }, '[sync] 开始补偿同步（从水位拉缺口）')
             const sessions = await client.listSessions()
@@ -144,7 +155,7 @@ export class SyncService implements SyncCoordinator {
 
     /** 拉取单个会话的全部消息（分页），逐条去重入队 */
     private async pullSession(
-        client: WeflowRestClient,
+        client: WeflowClientLike,
         talker: string,
         start: number,
         watermark: { ts: number, rawid: string },
@@ -162,51 +173,49 @@ export class SyncService implements SyncCoordinator {
         }
     }
 
-    /** 单条消息：算 rawid → 去重 → 入队，并推进本轮水位 */
+    /** 单条消息：归一化 → 去重 → 入队，并推进本轮水位 */
     private processMessage(
         talker: string,
         msg: WeflowMessage,
         now: number,
         watermark: { ts: number, rawid: string },
     ): void {
-        // rawid 取 serverId（微信服务端消息 id，≈ SSE rawid）；缺则回退 localId。
-        // 注：serverId↔SSE rawid 的等价性为对接假设，待与 WeFlow 实测对齐（见链路文档 §11）。
-        const rawid = String(msg.serverId ?? msg.localId ?? '').trim()
-        if (!rawid) return
-        const event = 'message.new'
-        const ts = typeof msg.createTime === 'number' ? msg.createTime : null
+        const n = this.adapter.normalize({ talker, message: msg })
+        if (!n.dedupKey) return
         this.progress.messagesPulled += 1
 
-        if (!this.db.dedup.markIfNew(event, rawid, now)) {
+        if (!this.db.dedup.markIfNew(WEFLOW_CHANNEL_ID, n.dedupKey, now)) {
             this.progress.duplicates += 1
             return
         }
 
-        const dataJson = JSON.stringify({
-            event,
-            sessionId: talker,
-            rawid,
-            content: msg.content,
-            timestamp: ts,
-            senderUsername: msg.senderUsername,
-            source: 'catchup',
-            message: msg,
-        })
-        this.db.queue.enqueue({ event, rawid, msgTimestamp: ts, dataJson, source: 'catchup' }, now)
+        this.db.queue.enqueue({
+            channelId: WEFLOW_CHANNEL_ID,
+            platform: WEFLOW_PLATFORM,
+            eventType: n.eventType,
+            externalId: n.externalId,
+            conversationId: n.conversationId,
+            senderId: n.senderId,
+            msgTimestamp: n.msgTimestamp,
+            hasMedia: n.media.length > 0 ? 1 : 0,
+            rawJson: n.rawJson,
+            mediaJson: n.media.length > 0 ? JSON.stringify(n.media) : null,
+            ingestPath: 'catchup',
+        }, now)
         this.progress.enqueued += 1
 
-        if (ts !== null && ts > watermark.ts) {
-            watermark.ts = ts
-            watermark.rawid = rawid
+        if (n.msgTimestamp !== null && n.msgTimestamp > watermark.ts) {
+            watermark.ts = n.msgTimestamp
+            watermark.rawid = n.dedupKey
         }
     }
 
     /** 入库水位推进：仅在更大时更新（独立于转发侧 breakpoint） */
     private advanceWatermark(watermark: { ts: number, rawid: string }): void {
-        const current = this.db.meta.getNumber(META_KEYS.lastSyncTimestamp) ?? 0
-        if (watermark.ts > current) {
-            this.db.meta.set(META_KEYS.lastSyncTimestamp, watermark.ts)
-            if (watermark.rawid) this.db.meta.set(META_KEYS.lastSyncRawid, watermark.rawid)
+        if (watermark.ts > 0) {
+            this.db.channelState.advanceWatermark(
+                WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, watermark.ts, watermark.rawid, nowSec(),
+            )
         }
     }
 
