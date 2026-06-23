@@ -1,19 +1,9 @@
-// meta 表访问：全局单例 k-v 状态（见需求文档 §4.3）。
+// meta 表访问：全局单例 k-v 状态（仅 schemaVersion 等全局键；按 channel 的水位见 channel_state）。
 import type BetterSqlite3 from 'better-sqlite3'
 
-/** 同步模块使用的 meta 键 */
+/** 全局单例 meta 键（仅放真正全局、与具体 channel 无关的键） */
 export const META_KEYS = {
     schemaVersion: 'schemaVersion',
-    /** 首次初始化时刻（秒）：用于「启动态三态分流」判定首装 */
-    installTime: 'installTime',
-    /**
-     * 同步水位：已成功入队的最大消息时间戳（秒）。补偿同步以此为起点拉缺口。
-     * 注：这是「同步拉取侧」水位，独立于转发侧 breakpointTimestamp（后者由 forwarder 在 code==1 后推进）。
-     * 待 forwarder 落地后，补偿起点应改读 breakpointTimestamp（见需求文档 §5 关键不变量）。
-     */
-    lastSyncTimestamp: 'lastSyncTimestamp',
-    /** 同步水位对应的 rawid（同一秒多条时精确定位） */
-    lastSyncRawid: 'lastSyncRawid',
 } as const
 
 export class MetaStore {
