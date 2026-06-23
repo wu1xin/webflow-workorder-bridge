@@ -119,16 +119,19 @@ export function migrate(db: BetterSqlite3.Database): void {
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string } | undefined
     const current = row ? Number(row.value) : 0
 
-    if (current < 2) {
-        db.exec(DROP_LEGACY)
-        // 旧全局水位键迁往 channel_state，清理之
-        db.exec('DELETE FROM meta WHERE key IN (\'installTime\',\'lastSyncTimestamp\',\'lastSyncRawid\')')
-    }
+    // DROP + 建表 + 写版本放进单事务：迁移中途崩溃不会留下半成品 schema
+    db.transaction(() => {
+        if (current < 2) {
+            db.exec(DROP_LEGACY)
+            // 旧全局水位键迁往 channel_state，清理之
+            db.exec('DELETE FROM meta WHERE key IN (\'installTime\',\'lastSyncTimestamp\',\'lastSyncRawid\')')
+        }
 
-    db.exec(DDL)
+        db.exec(DDL)
 
-    if (current < SCHEMA_VERSION) {
-        db.prepare('INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-            .run('schemaVersion', String(SCHEMA_VERSION))
-    }
+        if (current < SCHEMA_VERSION) {
+            db.prepare('INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+                .run('schemaVersion', String(SCHEMA_VERSION))
+        }
+    })()
 }

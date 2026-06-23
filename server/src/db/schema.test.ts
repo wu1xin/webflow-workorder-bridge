@@ -48,4 +48,27 @@ describe('schema v2', () => {
     it('迁移幂等：重复 migrate 不报错', () => {
         expect(() => { migrate(db); migrate(db) }).not.toThrow()
     })
+
+    it('v1→v2 升级路径：DROP 旧表并清理旧水位键', () => {
+        const v1 = new BetterSqlite3(':memory:')
+        v1.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)')
+        v1.exec('CREATE TABLE queue (id INTEGER PRIMARY KEY, source TEXT, data_json TEXT)')
+        v1.prepare('INSERT INTO meta(key, value) VALUES (?, ?)').run('schemaVersion', '1')
+        v1.prepare('INSERT INTO meta(key, value) VALUES (?, ?)').run('installTime', '111')
+        v1.prepare('INSERT INTO meta(key, value) VALUES (?, ?)').run('lastSyncTimestamp', '222')
+        v1.prepare('INSERT INTO meta(key, value) VALUES (?, ?)').run('lastSyncRawid', 'r1')
+
+        migrate(v1)
+
+        const qcols = columns(v1, 'queue')
+        expect(qcols).toContain('ingest_path')
+        expect(qcols).not.toContain('source')
+        const keys = (v1.prepare('SELECT key FROM meta').all() as Array<{ key: string }>).map(r => r.key)
+        expect(keys).not.toContain('installTime')
+        expect(keys).not.toContain('lastSyncTimestamp')
+        expect(keys).not.toContain('lastSyncRawid')
+        const ver = v1.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
+        expect(ver.value).toBe('2')
+        v1.close()
+    })
 })
