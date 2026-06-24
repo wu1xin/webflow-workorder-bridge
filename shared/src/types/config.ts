@@ -7,11 +7,7 @@ export interface WeflowConfig {
     host: string
     /** WeFlow API/SSE 共用端口，默认 5031 */
     port: number
-    /**
-   * 🔒 WeFlow Access Token（敏感）。
-   * - 落盘 AES-256-GCM 加密；明文仅存在于后端内存。
-   * - `GET /api/config` 返回掩码串（如 `wf_****cdef`），不回传明文。
-   */
+    /** WeFlow Access Token（内部工具，全链路明文存取，不加密、不掩码） */
     accessToken: string
     /** 连接超时（秒），默认 10 */
     connectTimeoutSec: number
@@ -36,12 +32,9 @@ export interface WeflowConfig {
 
 /**
  * WeFlow 配置更新负载（`PUT /api/config`）。
- * 敏感字段 `accessToken` 可置 `null` 或省略，表示「保持不变」——
- * 避免把前端读到的掩码串当作新 Token 写回（见配置说明 §6 掩码字段保存陷阱）。
+ * token 不再掩码，前端直接回填明文并整体写回，故与 {@link WeflowConfig} 同构。
  */
-export type WeflowConfigUpdate = Omit<WeflowConfig, 'accessToken'> & {
-    accessToken?: string | null
-}
+export type WeflowConfigUpdate = WeflowConfig
 
 /** 应用整体配置（分组聚合，首版仅 weflow）。读取走 GET /api/config；保存按模块拆分（如 PUT /api/config/weflow） */
 export interface AppConfig {

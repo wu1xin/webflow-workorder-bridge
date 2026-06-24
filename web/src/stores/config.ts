@@ -1,4 +1,4 @@
-// 配置 store：加载/保存服务端配置；后端不可达时回退默认值，保证表单仍可编辑。
+// 配置 store：加载/保存服务端配置。无默认配置——后端有就回有，没就是未配置（weflow 为 undefined）。
 // 另维护一条 SSE 长连接（GET /api/stream/status），实时同步 WeFlow 上游连接状态。
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
@@ -24,7 +24,7 @@ export const useConfigStore = defineStore(
         const loading = ref(false)
         /** 是否已加载 */
         const loaded = ref(false)
-        /** 加载失败信息（后端未实现/不可达时非空，此时已回退默认值） */
+        /** 加载失败信息（后端未实现/不可达时非空） */
         const loadError = ref<string>()
 
         /** 状态推送长连接（非响应式，仅作句柄管理） */
@@ -47,7 +47,7 @@ export const useConfigStore = defineStore(
             })
         }
 
-        /** 保存 WeFlow 配置；成功后用服务端返回的掩码配置刷新快照（错误向上抛给调用方处理） */
+        /** 保存 WeFlow 配置；成功后用服务端返回的配置刷新快照（错误向上抛给调用方处理） */
         function saveWeflow(update: WeflowConfigUpdate){
             return new Promise<void>((resolve, reject) => {
                 updateWeflowConfig(update).then((cfg) => {

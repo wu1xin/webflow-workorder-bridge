@@ -52,7 +52,7 @@ export class SyncService implements SyncCoordinator {
         this.db = deps.db
         this.log = deps.log
         this.alert = deps.alert
-        this.createClient = deps.createClient ?? ((cfg) => new WeflowRestClient(cfg))
+        this.createClient = deps.createClient ?? ((cfg) => new WeflowRestClient(cfg, this.log))
     }
 
     /** 当前同步进度快照 */
@@ -162,7 +162,18 @@ export class SyncService implements SyncCoordinator {
     ): Promise<void> {
         let offset = 0
         for (;;) {
-            const page = await client.fetchMessagesPage(talker, start, offset, PAGE_SIZE)
+            this.log.debug({ talker, start, offset, limit: PAGE_SIZE }, '[sync] 拉取会话分页')
+            let page: MessagesPage
+            try {
+                page = await client.fetchMessagesPage(talker, start, offset, PAGE_SIZE)
+            } catch (e) {
+                const message = e instanceof Error ? e.message : String(e)
+                this.log.error(
+                    { talker, start, offset, limit: PAGE_SIZE, err: message },
+                    `[sync] 拉取会话分页失败：talker=${talker} offset=${offset}`,
+                )
+                throw e
+            }
             if (page.messages.length === 0) break
             const now = nowSec()
             for (const msg of page.messages) {
@@ -219,8 +230,11 @@ export class SyncService implements SyncCoordinator {
         }
     }
 
+    /** 取当前连接参数；同步仅在已连接（即已配置）后触发，未配置属调用方时序错误 */
     private cfg(): WeflowConfig {
-        return this.store.getWeflow()
+        const w = this.store.getWeflow()
+        if (!w) throw new Error('[sync] 上游未配置，无法获取连接参数')
+        return w
     }
 
     /** 开始一轮同步：置忙 + 重置计数。返回 false 表示已有同步在跑。 */

@@ -1,20 +1,10 @@
-// WeFlow 上游运行期连接状态类型（前后端共用）。
-// 与「连接测试诊断」(WeflowConnectDiagnosis) 区分：那是一次性试连的结论，
-// 这里是常驻连接管理器的实时状态机，经 GET /api/status 快照与 GET /api/stream/status SSE 下推前端。
+// WeFlow 上游运行期连接状态相关类型（前后端共用）。
+// 状态机枚举 WeflowConnectionState 已下沉至 constants/config.ts（与运行期常量值同处），此处仅引用其类型。
 import type { WeflowConnectDiagnosis } from './config.js'
+import type { WeflowConnectionState } from '../constants/config.js'
 
-/**
- * 对前端暴露的连接状态机（FR-CONN-06 / 配置说明 §9.3）。
- * disconnected → connecting → connected；连上但 health 不通/久无数据 → weflowNotReady；
- * 断开进入 reconnecting（携带固定重连间隔与本段已测试次数）。
- */
-export type WeflowConnectionState =
-  | 'unconfigured'
-  | 'disconnected'
-  | 'connecting'
-  | 'connected'
-  | 'weflowNotReady'
-  | 'reconnecting'
+// 重新导出，保持 `@wb/shared/types` 既有导入面不变（消费方多以 type 形式引用）。
+export type { WeflowConnectionState }
 
 /** 自动重连循环的实时进度（reconnecting 态下非空） */
 export interface ReconnectProgress {

@@ -6,14 +6,12 @@ import { runConnectionGate } from '../weflow/gate.js'
 import { validateWeflowUpdate } from '../config/validate.js'
 import type { AppContext } from './context.js'
 
-/** 把待测更新负载与现状合成完整配置：accessToken 缺省时沿用已存 Token */
-function resolveConfigForTest(ctx: AppContext, update: WeflowConfigUpdate): WeflowConfig {
-    const current = ctx.store.getWeflow()
-    const token = update.accessToken
+/** 把待测更新负载组装成完整配置（token 全程明文，直接取用） */
+function resolveConfigForTest(update: WeflowConfigUpdate): WeflowConfig {
     return {
         host: update.host.trim(),
         port: update.port,
-        accessToken: token === null || token === undefined ? current.accessToken : token.trim(),
+        accessToken: update.accessToken.trim(),
         connectTimeoutSec: update.connectTimeoutSec,
         readTimeoutSec: update.readTimeoutSec,
         firstMessageTimeoutSec: update.firstMessageTimeoutSec,
@@ -31,12 +29,12 @@ export function registerTestRoutes(app: FastifyInstance, ctx: AppContext): void 
             if (!update || typeof update !== 'object') {
                 return reply.code(400).send({ error: '请求体格式错误：缺少 weflow' })
             }
-            const validation = validateWeflowUpdate(update, { hasExistingToken: ctx.store.hasToken() })
+            const validation = validateWeflowUpdate(update)
             if (!validation.ok) {
                 return reply.code(400).send({ error: '配置校验失败', fields: validation.errors })
             }
 
-            const cfg = resolveConfigForTest(ctx, update)
+            const cfg = resolveConfigForTest(update)
             const result = await runConnectionGate(cfg, { keepAlive: false })
             return {
                 healthOk: result.healthOk,

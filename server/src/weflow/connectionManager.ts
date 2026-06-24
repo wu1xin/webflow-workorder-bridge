@@ -12,8 +12,10 @@ import { runConnectionGate, type GateResult } from './gate.js'
 import { SseClient, type SseCloseReason } from './sseClient.js'
 import type { AlertChannel, SyncCoordinator, SyncReason } from './hooks.js'
 import type { Logger } from './logger.js'
-import type { ReconnectProgress, WeflowConnectionState, WeflowConnectionStatus } from './types.js'
+import type { ReconnectProgress, WeflowConnectionStatus } from './types.js'
 import { redactToken, sseUrl } from './types.js'
+// 运行期状态机枚举：取常量值复用，避免散落字面量（值与同名类型同处一个 const-object）。
+import { WeflowConnectionState } from '@wb/shared/constants'
 
 /** 触发一次（重）连接的来源 */
 type RestartTrigger = 'boot' | 'config' | 'manual'
@@ -41,7 +43,7 @@ export class WeflowConnectionManager extends EventEmitter {
     private readonly alert: AlertChannel
 
     private status: WeflowConnectionStatus = {
-        state: 'unconfigured',
+        state: WeflowConnectionState.unconfigured,
         diagnosis: null,
         lastConnectedAt: null,
         message: null,
@@ -89,7 +91,7 @@ export class WeflowConnectionManager extends EventEmitter {
     /** 启动时调用：有可用配置则发起初次连接，否则停在「未配置」态（§1） */
     start(): void {
         if (!this.store.isConnectable()) {
-            this.setState('unconfigured', { message: '未配置 WeFlow 连接参数' })
+            this.setState(WeflowConnectionState.unconfigured, { message: '未配置 WeFlow 连接参数' })
             this.log.info('[weflow] 未配置连接参数，停在未配置态，等待前端填写')
             return
         }
@@ -106,8 +108,11 @@ export class WeflowConnectionManager extends EventEmitter {
         void this.restart('manual')
     }
 
+    /** 取当前连接参数；仅在 isConnectable() 通过后调用，未配置属调用方时序错误 */
     private cfg(): WeflowConfig {
-        return this.store.getWeflow()
+        const w = this.store.getWeflow()
+        if (!w) throw new Error('[weflow] 上游未配置，无法获取连接参数')
+        return w
     }
 
     /**
@@ -119,11 +124,11 @@ export class WeflowConnectionManager extends EventEmitter {
         this.teardown()
 
         if (!this.store.isConnectable()) {
-            this.setState('unconfigured', { message: '未配置 WeFlow 连接参数' })
+            this.setState(WeflowConnectionState.unconfigured, { message: '未配置 WeFlow 连接参数' })
             return
         }
 
-        this.setState('connecting', { message: '正在连接 WeFlow…' })
+        this.setState(WeflowConnectionState.connecting, { message: '正在连接 WeFlow…' })
         this.log.info({ trigger, target: redactToken(sseUrl(this.cfg())) }, '[weflow] 开始三级连接判定')
         const result = await runConnectionGate(this.cfg(), { keepAlive: true })
 
@@ -175,7 +180,7 @@ export class WeflowConnectionManager extends EventEmitter {
             this.log.warn({ err: err.message }, '[weflow] SSE 流读取出错')
         })
 
-        this.setState('connected', {
+        this.setState(WeflowConnectionState.connected, {
             diagnosis: null,
             lastConnectedAt: nowSec(),
             message: '已连接 · 接收中',
@@ -195,7 +200,7 @@ export class WeflowConnectionManager extends EventEmitter {
     /** 最终判断（§3）：再跑一次三级闸门。成功→恢复(补偿同步)；失败→记日志+告警+进重连循环 */
     private async runFinalJudgment(epoch: number): Promise<void> {
         if (epoch !== this.epoch) return
-        this.setState('connecting', { message: '疑似掉线，重试 health 做最终判断…' })
+        this.setState(WeflowConnectionState.connecting, { message: '疑似掉线，重试 health 做最终判断…' })
         const result = await runConnectionGate(this.cfg(), { keepAlive: true })
         if (epoch !== this.epoch) {
             result.client?.close()
@@ -226,7 +231,7 @@ export class WeflowConnectionManager extends EventEmitter {
             attempts: 0,
             since: nowSec(),
         }
-        this.setState('reconnecting', {
+        this.setState(WeflowConnectionState.reconnecting, {
             diagnosis: lastResult.diagnosis,
             message: `自动重连中（${lastResult.failureLabel ?? lastResult.diagnosis}）`,
             reconnect,
@@ -298,8 +303,8 @@ export class WeflowConnectionManager extends EventEmitter {
     private setFailedState(result: GateResult): void {
         const state: WeflowConnectionState
             = result.diagnosis === 'weflow_not_ready' || result.diagnosis === 'connected_no_push'
-                ? 'weflowNotReady'
-                : 'disconnected'
+                ? WeflowConnectionState.weflowNotReady
+                : WeflowConnectionState.disconnected
         this.setState(state, {
             diagnosis: result.diagnosis,
             message: result.message,

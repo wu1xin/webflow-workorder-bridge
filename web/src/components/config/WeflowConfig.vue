@@ -56,7 +56,7 @@
             >
                 <ElInput
                     v-model="weflowForm.model.accessToken"
-                    :placeholder="tokenPlaceholder"
+                    placeholder="请输入 weflow Access Token"
                     style="width: 250px;"
                     clearable
                 />
@@ -176,19 +176,20 @@ import { ApiError } from '@/api/http'
 import { computed, ref, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { WEFLOW_LIMITS } from '@wb/shared/constants'
-import { type WeflowConfig, type WeflowConfigUpdate, type WeflowConnectionState } from '@wb/shared/types'
+import { WeflowConnectionState } from '@wb/shared/constants/config'
+import { type WeflowConfig, type WeflowConfigUpdate } from '@wb/shared/types'
 import { ElCard, ElForm, ElFormItem, ElButton, ElInputNumber, ElInput, ElMessage, type FormInstance, type FormRules } from 'element-plus'
 
 type TagType = 'primary' | 'success' | 'info' | 'warning' | 'danger'
 
 /** 运行期连接状态 → 标签颜色/文案（数据源为 store.connectionStatus，经 SSE 实时驱动） */
 const STATE_TAG_MAP: Record<WeflowConnectionState, { type: TagType, text: string }> = {
-    unconfigured: { type: 'info', text: '未配置' },
-    connecting: { type: 'primary', text: '连接中…' },
-    connected: { type: 'success', text: '已连接 · 接收中' },
-    weflowNotReady: { type: 'warning', text: 'WeFlow 未就绪' },
-    reconnecting: { type: 'warning', text: '自动重连中' },
-    disconnected: { type: 'danger', text: '连接失败' },
+    [WeflowConnectionState.unconfigured]: { type: 'info', text: '未配置' },
+    [WeflowConnectionState.connecting]: { type: 'primary', text: '连接中…' },
+    [WeflowConnectionState.connected]: { type: 'success', text: '已连接 · 接收中' },
+    [WeflowConnectionState.weflowNotReady]: { type: 'warning', text: 'WeFlow 未就绪' },
+    [WeflowConnectionState.reconnecting]: { type: 'warning', text: '自动重连中' },
+    [WeflowConnectionState.disconnected]: { type: 'danger', text: '连接失败' },
 } as const
 
 const store = useConfigStore()
@@ -222,13 +223,8 @@ const weflowForm = ref({
             trigger: 'blur',
         }],
         accessToken: [{
-            validator: (_rule: unknown, value: unknown, callback: (e?: Error) => void) => {
-                if (!hasExistingToken.value && !String(value ?? '').trim()) {
-                    callback(new Error('请输入 Access Token'))
-                } else {
-                    callback()
-                }
-            },
+            required: true,
+            message: '请输入 Access Token',
             trigger: 'blur',
         }],
     } as FormRules<WeflowConfig>,
@@ -252,20 +248,6 @@ const lastConnectedText = computed(() => {
     return `最近连接 ${new Date(lastConnectedAt * 1000).toLocaleTimeString('zh-CN', { hour12: false })}`
 })
 
-/** 是否已配置 Access Token */
-const hasExistingToken = computed(() => {
-    return Boolean(store.config.weflow?.accessToken)
-})
-
-/** 计算 token 输入框的占位符 */
-const tokenPlaceholder = computed(() => {
-    let _placeholder = '请输入 weflow Access Token'
-    if (hasExistingToken.value) {
-        _placeholder = '已配置，留空保持不变'
-    }
-    return _placeholder
-})
-
 /** 监听 store 快照变化，重置表单 */
 watch(
     () => store.config.weflow, 
@@ -273,7 +255,7 @@ watch(
         if (newWeflowConfig) {
             weflowForm.value.model.host = newWeflowConfig.host
             weflowForm.value.model.port = newWeflowConfig.port
-            weflowForm.value.model.accessToken = ''
+            weflowForm.value.model.accessToken = newWeflowConfig.accessToken
             weflowForm.value.model.connectTimeoutSec = newWeflowConfig.connectTimeoutSec
             weflowForm.value.model.readTimeoutSec = newWeflowConfig.readTimeoutSec
             weflowForm.value.model.firstMessageTimeoutSec = newWeflowConfig.firstMessageTimeoutSec
@@ -285,13 +267,12 @@ watch(
     { immediate: true }, 
 )
 
-/** 把表单组装成更新负载：token 为空表示保持不变（置 null） */
+/** 把表单组装成更新负载：token 直接整体写回（明文） */
 function buildUpdate(): WeflowConfigUpdate {
-    const token = weflowForm.value.model.accessToken.trim()
     return {
         host: weflowForm.value.model.host.trim(),
         port: weflowForm.value.model.port,
-        accessToken: token ? token : undefined, // token 为空表示保持不变
+        accessToken: weflowForm.value.model.accessToken.trim(),
         connectTimeoutSec: weflowForm.value.model.connectTimeoutSec,
         readTimeoutSec: weflowForm.value.model.readTimeoutSec,
         firstMessageTimeoutSec: weflowForm.value.model.firstMessageTimeoutSec,

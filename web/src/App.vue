@@ -54,11 +54,11 @@ onMounted(() => configStore.connectStatusStream())
 onBeforeUnmount(() => configStore.disconnectStatusStream())
 
 const menus = [
-    { path: '/', label: '总览/状态' },
+    // { path: '/', label: '总览/状态' },
     { path: '/config', label: '配置' },
-    { path: '/test', label: '测试与诊断' },
-    { path: '/logs', label: '日志/审计' },
-    { path: '/dlq', label: '死信队列' },
+    // { path: '/test', label: '测试与诊断' },
+    // { path: '/logs', label: '日志/审计' },
+    // { path: '/dlq', label: '死信队列' },
 ]
 </script>
 

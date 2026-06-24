@@ -47,12 +47,10 @@ function checkIntRange(
 }
 
 /**
- * 校验 WeFlow 配置更新负载。
- * accessToken 为 null/undefined 表示「保持不变」，仅在已有 Token 时合法（由调用方结合现状判断 hasExistingToken）。
+ * 校验 WeFlow 配置更新负载（token 全程明文，必填非空）。
  */
 export function validateWeflowUpdate(
     update: WeflowConfigUpdate,
-    opts: { hasExistingToken: boolean },
 ): ValidationResult {
     const errors: FieldErrors = {}
 
@@ -68,13 +66,8 @@ export function validateWeflowUpdate(
     checkIntRange(errors, 'reconnectIntervalSec', update.reconnectIntervalSec, WEFLOW_LIMITS.reconnectIntervalSec, '重连间隔')
     checkIntRange(errors, 'reconnectLogIntervalSec', update.reconnectLogIntervalSec, WEFLOW_LIMITS.reconnectLogIntervalSec, '重连日志周期')
 
-    // accessToken：null/undefined = 保持不变（须已有 Token）；否则非空（trim 后）
-    const token = update.accessToken
-    if (token === null || token === undefined) {
-        if (!opts.hasExistingToken) {
-            errors.accessToken = '请输入 Access Token'
-        }
-    } else if (typeof token !== 'string' || !token.trim()) {
+    // accessToken：必填，trim 后非空
+    if (typeof update.accessToken !== 'string' || !update.accessToken.trim()) {
         errors.accessToken = '请输入 Access Token'
     }
 

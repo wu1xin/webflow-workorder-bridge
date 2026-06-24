@@ -1,7 +1,8 @@
 // WeFlow REST 客户端：拉会话列表与会话消息，供同步/补偿用（见 docs/http-api.md §3、§4）。
 // 鉴权用 Authorization: Bearer（REST 推荐方式）；SSE 才用 query access_token。
 import type { WeflowConfig } from '@wb/shared/types'
-import { baseUrl } from './types.js'
+import type { Logger } from './logger.js'
+import { baseUrl, redactToken } from './types.js'
 
 /** REST 数据拉取超时（毫秒）：本机回环、单页有限，给足下载时间 */
 const REST_TIMEOUT_MS = 60_000
@@ -40,9 +41,11 @@ export interface MessagesPage {
 
 export class WeflowRestClient {
     private readonly cfg: WeflowConfig
+    private readonly log?: Logger
 
-    constructor(cfg: WeflowConfig) {
+    constructor(cfg: WeflowConfig, log?: Logger) {
         this.cfg = cfg
+        this.log = log
     }
 
     private authHeaders(): Record<string, string> {
@@ -54,14 +57,20 @@ export class WeflowRestClient {
         for (const [k, v] of Object.entries(params)) {
             url.searchParams.set(k, String(v))
         }
+        this.log?.debug({ path, params, url: redactToken(url.toString()) }, '[weflow:rest] 请求上游')
         const res = await fetch(url, {
             method: 'GET',
             headers: this.authHeaders(),
             signal: AbortSignal.timeout(REST_TIMEOUT_MS),
         })
         if (!res.ok) {
-            await res.text().catch(() => '')
-            throw new Error(`WeFlow ${path} 返回 HTTP ${res.status}`)
+            const body = await res.text().catch(() => '')
+            const snippet = body.slice(0, 1_000)
+            this.log?.error(
+                { path, params, status: res.status, url: redactToken(url.toString()), body: snippet },
+                `[weflow:rest] 上游返回 HTTP ${res.status}`,
+            )
+            throw new Error(`WeFlow ${path} 返回 HTTP ${res.status}${snippet ? `：${snippet}` : ''}`)
         }
         return res.json()
     }
