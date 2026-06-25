@@ -1,4 +1,4 @@
-// SQLite 连接：开库（WAL + 外键）、跑迁移，封装 meta / dedup / queue 三个数据访问对象。
+// SQLite 连接：开库（WAL + 外键）、跑迁移，封装 meta / channelState / dedup / queue / chatGroup 五个数据访问对象。
 // 库文件 %LOCALAPPDATA%\weflow-bridge\bridge.db（见需求文档 §4.2）。
 import BetterSqlite3 from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
@@ -9,6 +9,7 @@ import { MetaStore } from './meta.js'
 import { ChannelStateStore } from './channelState.js'
 import { DedupStore } from './dedup.js'
 import { QueueStore } from './queue.js'
+import { ChatGroupStore } from './chatGroup.js'
 
 /** bridge.db 路径 */
 export function dbFilePath(): string {
@@ -22,6 +23,7 @@ export class Db {
     readonly channelState: ChannelStateStore
     readonly dedup: DedupStore
     readonly queue: QueueStore
+    readonly chatGroup: ChatGroupStore
 
     private constructor(raw: BetterSqlite3.Database) {
         this.raw = raw
@@ -29,6 +31,7 @@ export class Db {
         this.channelState = new ChannelStateStore(raw)
         this.dedup = new DedupStore(raw)
         this.queue = new QueueStore(raw)
+        this.chatGroup = new ChatGroupStore(raw)
     }
 
     /** 打开（或新建）库：建目录 → WAL/外键 → 迁移建表 */
