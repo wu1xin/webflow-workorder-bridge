@@ -1,9 +1,10 @@
 // SQLite 表结构（DDL）+ 迁移。多上游 v2：引入 channel_id/platform 维度。
+// v3 新增 chat_group（群聊登记 + 下游推送裁决）。
 // 设计依据见 docs/plans/2026-06-23-multi-upstream-schema-design.md。
 import type BetterSqlite3 from 'better-sqlite3'
 
 /** 库结构版本：结构有破坏性变更时 +1，并在 migrate 中补迁移分支 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 const DDL = `
 -- 1. meta —— 全局单例状态（仅放真正全局的键，如 schemaVersion）
@@ -97,6 +98,24 @@ CREATE TABLE IF NOT EXISTS media_cache (
   uploaded_at     INTEGER NOT NULL,  -- 上传完成时间（秒级时间戳）
   PRIMARY KEY (channel_id, media_key)
 );
+
+-- 8. chat_group —— 群聊登记 + 下游推送裁决（仅群聊转发的闸门数据源）
+CREATE TABLE IF NOT EXISTS chat_group (
+  channel_id      TEXT    NOT NULL,                 -- 连接实例（weflow:default）
+  platform        TEXT    NOT NULL,                 -- 平台类型
+  conversation_id TEXT    NOT NULL,                 -- 群 ID（xxx@chatroom）= 会话 username
+  group_name      TEXT,                             -- 群名（displayName/groupName）
+  avatar_url      TEXT,                             -- 群头像（前端展示，可空）
+  push_allowed    INTEGER NOT NULL DEFAULT 0,       -- 下游裁决：1 可推送 | 0 不推送
+  sync_status     TEXT    NOT NULL DEFAULT 'pending', -- 同步下游状态：pending|synced|failed
+  synced_at       INTEGER,                          -- 最近一次成功同步下游的时刻（秒）
+  last_error      TEXT,                             -- 最近一次同步失败原因
+  first_seen_at   INTEGER NOT NULL,                 -- 首次发现该群的时刻（秒）
+  last_seen_at    INTEGER NOT NULL,                 -- 最近一次见到该群（会话/消息）的时刻（秒）
+  updated_at      INTEGER NOT NULL,                 -- 行更新时刻（秒）
+  PRIMARY KEY (channel_id, conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_group_push ON chat_group(channel_id, push_allowed);
 `
 
 // v1 → v2 破坏性变更：早期阶段无保留价值，直接 DROP 旧对象重建（设计文档 §6）。
