@@ -21,6 +21,7 @@ describe('HttpDownstreamClient.syncGroups', () => {
 
     it('code===1 时解析 data.allowed', async () => {
         const fetchImpl = (() => Promise.resolve({
+            ok: true,
             json: () => Promise.resolve({ code: 1, msg: 'success', data: { allowed: ['g1@chatroom'] } }),
         })) as unknown as typeof fetch
         const res = await clientWith(fetchImpl).syncGroups({ agentId: 'weflow:default', platform: 'weflow', groups: [] })
@@ -29,17 +30,34 @@ describe('HttpDownstreamClient.syncGroups', () => {
 
     it('code!==1 时抛错', async () => {
         const fetchImpl = (() => Promise.resolve({
+            ok: true,
             json: () => Promise.resolve({ code: 0, msg: '鉴权失败' }),
         })) as unknown as typeof fetch
         await expect(clientWith(fetchImpl).syncGroups({ agentId: 'a', platform: 'weflow', groups: [] }))
             .rejects.toThrow(/鉴权失败|code=0/)
     })
 
+    it('res.ok===false 时抛错，含状态码、不含 task_white_token', async () => {
+        expect.assertions(2)
+        const fetchImpl = (() => Promise.resolve({
+            ok: false,
+            status: 502,
+            text: () => Promise.resolve('<html>bad gateway</html>'),
+        })) as unknown as typeof fetch
+        try {
+            await clientWith(fetchImpl).syncGroups({ agentId: 'a', platform: 'weflow', groups: [] })
+        }
+        catch (e) {
+            expect((e as Error).message).toMatch(/502/)
+            expect((e as Error).message).not.toContain('task_white_token')
+        }
+    })
+
     it('请求 URL 带 task_white_token、body 为 JSON 信封', async () => {
         let captured: { url: string, body: string } | null = null
         const fetchImpl = ((url: string, init: { body: string }) => {
             captured = { url, body: init.body }
-            return Promise.resolve({ json: () => Promise.resolve({ code: 1, data: { allowed: [] } }) })
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ code: 1, data: { allowed: [] } }) })
         }) as unknown as typeof fetch
         await clientWith(fetchImpl).syncGroups({
             agentId: 'weflow:default', platform: 'weflow',
