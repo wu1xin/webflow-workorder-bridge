@@ -2,7 +2,7 @@
 // 见 docs/config/weflow-配置说明.md §5（数据结构）、§6（校验）。
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { AppConfig, WeflowConfig, WeflowConfigUpdate } from '@wb/shared/types'
+import type { AppConfig, DownstreamConfig, WeflowConfig, WeflowConfigUpdate } from '@wb/shared/types'
 import { configFilePath } from './paths.js'
 import { validateWeflowUpdate, type FieldErrors } from './validate.js'
 
@@ -19,8 +19,8 @@ export class ConfigValidationError extends Error {
  * 「有就是有，没就是没」：文件里有 weflow 就原样采用，没有即未配置（undefined）。
  */
 function decodeFromDisk(raw: unknown): AppConfig {
-    const weflow = (raw as { weflow?: WeflowConfig } | null)?.weflow
-    return { weflow }
+    const r = raw as { weflow?: WeflowConfig, downstream?: DownstreamConfig } | null
+    return { weflow: r?.weflow, downstream: r?.downstream }
 }
 
 /**
@@ -53,6 +53,11 @@ export class ConfigStore {
     /** 当前 WeFlow 配置（含明文 Token）；未配置时为 undefined，不伪造默认值 */
     getWeflow(): WeflowConfig | undefined {
         return this.config.weflow
+    }
+
+    /** 当前下游接入配置；未配置为 undefined */
+    getDownstream(): DownstreamConfig | undefined {
+        return this.config.downstream
     }
 
     /** 是否已配置可用 Token */
@@ -88,6 +93,7 @@ export class ConfigStore {
                 reconnectIntervalSec: update.reconnectIntervalSec,
                 reconnectLogIntervalSec: update.reconnectLogIntervalSec,
             },
+            downstream: this.config.downstream,
         }
 
         this.persist(next)
@@ -99,6 +105,6 @@ export class ConfigStore {
     private persist(cfg: AppConfig): void {
         const file = configFilePath()
         mkdirSync(dirname(file), { recursive: true })
-        writeFileSync(file, JSON.stringify({ weflow: cfg.weflow }, null, 2), 'utf8')
+        writeFileSync(file, JSON.stringify({ weflow: cfg.weflow, downstream: cfg.downstream }, null, 2), 'utf8')
     }
 }

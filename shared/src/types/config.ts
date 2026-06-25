@@ -34,9 +34,20 @@ export interface WeflowConfig {
  */
 export type WeflowConfigUpdate = WeflowConfig
 
+/** 下游 work-order-system 接入配置（出站调用用；密钥线下交付，明文落盘） */
+export interface DownstreamConfig {
+    /** 下游 base URL，如 https://example.com */
+    baseUrl: string
+    /** 分配给本代理的站点 key（task_white_token 明文里的 key） */
+    siteKey: string
+    /** AES 密钥串（实际取前 16 字节做 AES-128-ECB） */
+    aesKey: string
+}
+
 /** 应用整体配置（分组聚合，首版仅 weflow）。读取走 GET /api/config；保存按模块拆分（如 PUT /api/config/weflow） */
 export interface AppConfig {
     weflow?: WeflowConfig
+    downstream?: DownstreamConfig
 }
 
 /** WeFlow 连接测试诊断结论 */
