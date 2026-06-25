@@ -42,11 +42,10 @@
             >
                 <ElInputNumber
                     v-model="weflowForm.model.port"
-                    :min="limits.port.min"
-                    :max="limits.port.max"
-                    :step="1"
+                    :min="0"
                     :precision="0"
                     :controls="false"
+                    :align="'left'"
                     style="width: 100px;"
                 />
             </ElFormItem>
@@ -57,7 +56,6 @@
                 <ElInput
                     v-model="weflowForm.model.accessToken"
                     placeholder="请输入 weflow Access Token"
-                    style="width: 250px;"
                     clearable
                 />
             </ElFormItem>
@@ -67,8 +65,7 @@
             >
                 <ElInputNumber
                     v-model="weflowForm.model.connectTimeoutSec"
-                    :min="limits.connectTimeoutSec.min"
-                    :max="limits.connectTimeoutSec.max"
+                    :min="0"
                     :step="1"
                     :precision="0"
                 >
@@ -84,8 +81,7 @@
             >
                 <ElInputNumber
                     v-model="weflowForm.model.readTimeoutSec"
-                    :min="limits.readTimeoutSec.min"
-                    :max="limits.readTimeoutSec.max"
+                    :min="0"
                     :step="5"
                     :precision="0"
                 >
@@ -100,25 +96,8 @@
             >
                 <ElInputNumber
                     v-model="weflowForm.model.firstMessageTimeoutSec"
-                    :min="limits.firstMessageTimeoutSec.min"
-                    :max="limits.firstMessageTimeoutSec.max"
+                    :min="0"
                     :step="1"
-                    :precision="0"
-                >
-                    <template #suffix>
-                        <span>秒</span>
-                    </template>
-                </ElInputNumber>
-            </ElFormItem>
-            <ElFormItem
-                label="探活间隔"
-                prop="healthIntervalSec"
-            >
-                <ElInputNumber
-                    v-model="weflowForm.model.healthIntervalSec"
-                    :min="limits.healthIntervalSec.min"
-                    :max="limits.healthIntervalSec.max"
-                    :step="5"
                     :precision="0"
                 >
                     <template #suffix>
@@ -132,10 +111,10 @@
             >
                 <ElInputNumber
                     v-model="weflowForm.model.reconnectIntervalSec"
-                    :min="limits.reconnectIntervalSec.min"
-                    :max="limits.reconnectIntervalSec.max"
+                    :min="0"
                     :step="1"
                     :precision="0"
+                    @change="revalidateLogInterval"
                 >
                     <template #suffix>
                         <span>秒</span>
@@ -148,9 +127,8 @@
             >
                 <ElInputNumber
                     v-model="weflowForm.model.reconnectLogIntervalSec"
-                    :min="limits.reconnectLogIntervalSec.min"
-                    :max="limits.reconnectLogIntervalSec.max"
-                    :step="5"
+                    :min="0"
+                    :step="1"
                     :precision="0"
                 >
                     <template #suffix>
@@ -178,7 +156,7 @@ import { useConfigStore } from '@/stores/config'
 import { WEFLOW_LIMITS } from '@wb/shared/constants'
 import { WeflowConnectionState } from '@wb/shared/constants/config'
 import { type WeflowConfig, type WeflowConfigUpdate } from '@wb/shared/types'
-import { ElCard, ElForm, ElFormItem, ElButton, ElInputNumber, ElInput, ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ElCard, ElForm, ElFormItem, ElButton, ElInputNumber, ElInput, ElMessage, type FormInstance, type FormItemRule, type FormRules } from 'element-plus'
 
 type TagType = 'primary' | 'success' | 'info' | 'warning' | 'danger'
 
@@ -195,6 +173,22 @@ const STATE_TAG_MAP: Record<WeflowConnectionState, { type: TagType, text: string
 const store = useConfigStore()
 const limits = WEFLOW_LIMITS
 
+/** 数值字段统一校验：必填 + 落在 WEFLOW_LIMITS 区间内 */
+function numberRules(label: string, limit: { min: number, max: number }): FormItemRule[] {
+    return [{
+        required: true,
+        type: 'number',
+        message: `请输入${label}`,
+        trigger: 'blur',
+    }, {
+        type: 'number',
+        min: limit.min,
+        max: limit.max,
+        message: `${label}取值范围 ${limit.min} ~ ${limit.max}`,
+        trigger: 'blur',
+    }]
+}
+
 /** weflow 表单数据 */
 const weflowForm = ref({
     formRef: undefined as FormInstance | undefined,
@@ -205,7 +199,6 @@ const weflowForm = ref({
         connectTimeoutSec: 0,
         readTimeoutSec: 0,
         firstMessageTimeoutSec: 0,
-        healthIntervalSec: 0,
         reconnectIntervalSec: 0,
         reconnectLogIntervalSec: 0,
     } as WeflowConfig,
@@ -215,18 +208,30 @@ const weflowForm = ref({
             message: '请输入主机地址',
             trigger: 'blur',
         }],
-        port: [{
-            required: true,
-            type: 'number',
-            message:
-            '请输入端口',
-            trigger: 'blur',
-        }],
         accessToken: [{
             required: true,
             message: '请输入 Access Token',
             trigger: 'blur',
         }],
+        port: numberRules('端口', limits.port),
+        connectTimeoutSec: numberRules('连接超时', limits.connectTimeoutSec),
+        readTimeoutSec: numberRules('读超时', limits.readTimeoutSec),
+        firstMessageTimeoutSec: numberRules('首消息窗口', limits.firstMessageTimeoutSec),
+        reconnectIntervalSec: numberRules('重连间隔', limits.reconnectIntervalSec),
+        reconnectLogIntervalSec: [
+            ...numberRules('重连日志周期', limits.reconnectLogIntervalSec),
+            {
+                // 跨字段：日志周期须大于重连间隔（与后端 validateWeflowUpdate 一致）
+                validator: (_rule, value, callback) => {
+                    if (typeof value === 'number' && value <= weflowForm.value.model.reconnectIntervalSec) {
+                        callback(new Error('重连日志周期须大于重连间隔'))
+                        return
+                    }
+                    callback()
+                },
+                trigger: 'blur',
+            },
+        ],
     } as FormRules<WeflowConfig>,
     saving: false,
 })
@@ -259,7 +264,6 @@ watch(
             weflowForm.value.model.connectTimeoutSec = newWeflowConfig.connectTimeoutSec
             weflowForm.value.model.readTimeoutSec = newWeflowConfig.readTimeoutSec
             weflowForm.value.model.firstMessageTimeoutSec = newWeflowConfig.firstMessageTimeoutSec
-            weflowForm.value.model.healthIntervalSec = newWeflowConfig.healthIntervalSec
             weflowForm.value.model.reconnectIntervalSec = newWeflowConfig.reconnectIntervalSec
             weflowForm.value.model.reconnectLogIntervalSec = newWeflowConfig.reconnectLogIntervalSec
         }
@@ -276,10 +280,14 @@ function buildUpdate(): WeflowConfigUpdate {
         connectTimeoutSec: weflowForm.value.model.connectTimeoutSec,
         readTimeoutSec: weflowForm.value.model.readTimeoutSec,
         firstMessageTimeoutSec: weflowForm.value.model.firstMessageTimeoutSec,
-        healthIntervalSec: weflowForm.value.model.healthIntervalSec,
         reconnectIntervalSec: weflowForm.value.model.reconnectIntervalSec,
         reconnectLogIntervalSec: weflowForm.value.model.reconnectLogIntervalSec,
     }
+}
+
+/** 重连间隔变动后联动重校验「重连日志周期」（其取值依赖重连间隔） */
+function revalidateLogInterval() {
+    weflowForm.value.formRef?.validateField('reconnectLogIntervalSec').catch(() => {})
 }
 
 /** 点击保存按钮 */

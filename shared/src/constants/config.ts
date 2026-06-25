@@ -16,9 +16,8 @@ export const WEFLOW_FIXED_PATHS = {
 export const WEFLOW_LIMITS = {
     port: { min: 1, max: 65535 },
     connectTimeoutSec: { min: 1, max: 120 },
-    readTimeoutSec: { min: 10, max: 600 },
-    firstMessageTimeoutSec: { min: 1, max: 30 },
-    healthIntervalSec: { min: 5, max: 600 },
+    readTimeoutSec: { min: 60, max: 600 },
+    firstMessageTimeoutSec: { min: 10, max: 30 },
     reconnectIntervalSec: { min: 1, max: 60 },
     reconnectLogIntervalSec: { min: 10, max: 300 },
 } as const

@@ -85,7 +85,6 @@ export class ConfigStore {
                 connectTimeoutSec: update.connectTimeoutSec,
                 readTimeoutSec: update.readTimeoutSec,
                 firstMessageTimeoutSec: update.firstMessageTimeoutSec,
-                healthIntervalSec: update.healthIntervalSec,
                 reconnectIntervalSec: update.reconnectIntervalSec,
                 reconnectLogIntervalSec: update.reconnectLogIntervalSec,
             },

@@ -18,8 +18,6 @@ export interface WeflowConfig {
    * 超时未收到则判为「SSE 连接成功但无消息」（connected_no_push），默认 3。
    */
     firstMessageTimeoutSec: number
-    /** health 周期探活间隔（秒），默认 30 */
-    healthIntervalSec: number
     /**
    * 断线后自动重连循环每轮间隔（秒，固定不退避、不限次，直到连回），默认 1。
    * 循环每轮重跑「三级连接判定闸门」(health → SSE → 首消息)，见

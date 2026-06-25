@@ -62,9 +62,18 @@ export function validateWeflowUpdate(
     checkIntRange(errors, 'connectTimeoutSec', update.connectTimeoutSec, WEFLOW_LIMITS.connectTimeoutSec, '连接超时')
     checkIntRange(errors, 'readTimeoutSec', update.readTimeoutSec, WEFLOW_LIMITS.readTimeoutSec, '读超时')
     checkIntRange(errors, 'firstMessageTimeoutSec', update.firstMessageTimeoutSec, WEFLOW_LIMITS.firstMessageTimeoutSec, '首消息窗口')
-    checkIntRange(errors, 'healthIntervalSec', update.healthIntervalSec, WEFLOW_LIMITS.healthIntervalSec, '探活间隔')
     checkIntRange(errors, 'reconnectIntervalSec', update.reconnectIntervalSec, WEFLOW_LIMITS.reconnectIntervalSec, '重连间隔')
     checkIntRange(errors, 'reconnectLogIntervalSec', update.reconnectLogIntervalSec, WEFLOW_LIMITS.reconnectLogIntervalSec, '重连日志周期')
+
+    // 跨字段：重连日志周期须严格大于重连间隔（否则一个周期内攒不满一轮重连，汇总无意义）。
+    // 仅当两字段各自的整数/区间校验均已通过时才比较，避免叠加误导性错误。
+    if (
+        !errors.reconnectIntervalSec
+        && !errors.reconnectLogIntervalSec
+        && update.reconnectLogIntervalSec <= update.reconnectIntervalSec
+    ) {
+        errors.reconnectLogIntervalSec = '重连日志周期须大于重连间隔'
+    }
 
     // accessToken：必填，trim 后非空
     if (typeof update.accessToken !== 'string' || !update.accessToken.trim()) {
