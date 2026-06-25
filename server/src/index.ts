@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { ConfigStore } from './config/store.js'
 import { SyncService } from './sync/syncService.js'
+import { HttpDownstreamClient } from './downstream/client.js'
+import { GroupSyncService } from './sync/groupSyncService.js'
 import { registerTestRoutes } from './routes/test.js'
 import { registerSyncRoutes } from './routes/sync.js'
 import { type AppContext } from './routes/context.js'
@@ -45,7 +47,12 @@ const app = Fastify({
 const store = ConfigStore.load()
 const db = Db.open()
 const alert = createLogAlertChannel(app.log)
-const sync = new SyncService({ store, db, log: app.log, alert })
+const downstreamCfg = store.getDownstream()
+const groupSync = downstreamCfg
+    ? new GroupSyncService({ db, downstream: new HttpDownstreamClient(downstreamCfg, app.log), log: app.log, alert })
+    : undefined
+if (!groupSync) app.log.warn('[startup] 未配置 downstream，群同步停用，消息默认不推送')
+const sync = new SyncService({ store, db, log: app.log, alert, groupSync })
 const manager = new WeflowConnectionManager({
     store,
     log: app.log,

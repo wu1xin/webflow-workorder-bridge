@@ -12,6 +12,7 @@ import { WeflowAdapter, WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM } from '../weflow/ada
 import type { AlertChannel, SyncCoordinator, SyncReason } from '../weflow/hooks.js'
 import type { Logger } from '../weflow/logger.js'
 import { idleProgress, type SyncProgress } from './types.js'
+import { GroupSyncService, isWeflowGroup } from './groupSyncService.js'
 
 /** 补偿默认最大回溯窗口（秒）：默认 24h。超过则告警并截断起点（FR-SYNC-04 / FR-REL-08）。 */
 const MAX_LOOKBACK_SEC = 24 * 60 * 60
@@ -35,6 +36,8 @@ export interface SyncServiceDeps {
     alert: AlertChannel
     /** client 工厂，默认 new WeflowRestClient(cfg)；测试可注入桩 */
     createClient?: (cfg: WeflowConfig) => WeflowClientLike
+    /** 群同步服务；缺省则不做群同步（所有群默认不放行，不入队） */
+    groupSync?: GroupSyncService
 }
 
 export class SyncService implements SyncCoordinator {
@@ -44,6 +47,7 @@ export class SyncService implements SyncCoordinator {
     private readonly alert: AlertChannel
     private readonly adapter = new WeflowAdapter()
     private readonly createClient: (cfg: WeflowConfig) => WeflowClientLike
+    private readonly groupSync?: GroupSyncService
 
     private progress: SyncProgress = idleProgress()
 
@@ -53,6 +57,7 @@ export class SyncService implements SyncCoordinator {
         this.log = deps.log
         this.alert = deps.alert
         this.createClient = deps.createClient ?? ((cfg) => new WeflowRestClient(cfg, this.log))
+        this.groupSync = deps.groupSync
     }
 
     /** 当前同步进度快照 */
@@ -98,15 +103,17 @@ export class SyncService implements SyncCoordinator {
             }
             this.log.info('[sync] 开始全量同步（首装，拉取 WeFlow 全部历史）')
             const sessions = await client.listSessions()
-            this.progress.sessionsTotal = sessions.length
+            await this.syncGroups(sessions)
+            const groups = this.allowedGroupSessions(sessions)
+            this.progress.sessionsTotal = groups.length
             const watermark = { ts: 0, rawid: '' }
-            for (const s of sessions) {
+            for (const s of groups) {
                 await this.pullSession(client, s.username, 0, watermark)
                 this.progress.sessionsDone += 1
             }
             this.advanceWatermark(watermark)
             this.finish()
-            this.log.info({ enqueued: this.progress.enqueued, duplicates: this.progress.duplicates, sessions: sessions.length }, '[sync] 全量同步完成')
+            this.log.info({ enqueued: this.progress.enqueued, duplicates: this.progress.duplicates, sessions: groups.length }, '[sync] 全量同步完成')
         } catch (e) {
             this.fail(e, '全量同步')
         }
@@ -137,8 +144,10 @@ export class SyncService implements SyncCoordinator {
         try {
             this.log.info({ since: start }, '[sync] 开始补偿同步（从水位拉缺口）')
             const sessions = await client.listSessions()
-            // 只挑「起点之后有更新」的会话（FR-REL-03）；缺 lastTimestamp 的保守纳入
-            const candidates = sessions.filter(s => s.lastTimestamp === undefined || s.lastTimestamp >= start)
+            await this.syncGroups(sessions)
+            // 只挑「放行群 ∩ 起点之后有更新」的会话（FR-REL-03）；缺 lastTimestamp 的保守纳入
+            const candidates = this.allowedGroupSessions(sessions)
+                .filter(s => s.lastTimestamp === undefined || s.lastTimestamp >= start)
             this.progress.sessionsTotal = candidates.length
             const watermark = { ts: start, rawid: '' }
             for (const s of candidates) {
@@ -151,6 +160,21 @@ export class SyncService implements SyncCoordinator {
         } catch (e) {
             this.fail(e, '补偿同步')
         }
+    }
+
+    /** 列会话后同步群到下游；未配置 groupSync 则跳过（所有群默认不放行） */
+    private async syncGroups(sessions: WeflowSession[]): Promise<void> {
+        if (!this.groupSync) {
+            this.log.warn('[sync] 未配置下游群同步，所有群默认不推送，本轮不入队')
+            return
+        }
+        await this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, sessions)
+    }
+
+    /** 会话中筛出「是群且已被下游放行」的，作为消息拉取范围 */
+    private allowedGroupSessions(sessions: WeflowSession[]): WeflowSession[] {
+        const allowed = new Set(this.db.chatGroup.listAllowed(WEFLOW_CHANNEL_ID))
+        return sessions.filter(s => isWeflowGroup(s) && allowed.has(s.username))
     }
 
     /** 拉取单个会话的全部消息（分页），逐条去重入队 */
@@ -193,6 +217,8 @@ export class SyncService implements SyncCoordinator {
     ): void {
         const n = this.adapter.normalize({ talker, message: msg })
         if (!n.dedupKey) return
+        // 仅群聊转发闸门：未放行群（或无 conversationId）一律不入队（与会话级过滤双保险）
+        if (n.conversationId === null || !this.db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, n.conversationId)) return
         this.progress.messagesPulled += 1
 
         if (!this.db.dedup.markIfNew(WEFLOW_CHANNEL_ID, n.dedupKey, now)) {
