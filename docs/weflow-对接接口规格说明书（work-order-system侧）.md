@@ -159,6 +159,7 @@ HTTP 状态码 == 200  且  响应 body 中  code == 1
 | 2 | 媒体上传（第 1 步） | `/extra_server/weflow/uploadMedia` | POST multipart | Q-L / FR-MEDIA-04 |
 | 3 | 消息接收（第 2 步） | `/extra_server/weflow/receiveMessage` | POST json | Q-B / FR-FWD-01 / FR-PASS |
 | 4 | 心跳上报 | `/extra_server/weflow/heartbeat` | POST json | Q-C / FR-HB |
+| 5 | 群聊同步 | `/extra_server/weflow/syncGroups` | POST json | 群推送白名单同步 |
 
 所有接口均需 `?task_white_token=...`（§2.2）。
 
@@ -386,6 +387,55 @@ HTTP 状态码 == 200  且  响应 body 中  code == 1
 
 ---
 
+### 4.5 群聊同步 `syncGroups`
+
+代理拉取 WeFlow 群聊会话后，把群快照同步给本系统；本系统返回**可接收推送**的群名单（白名单语义）。代理据此只推送被放行群的消息。
+
+- **URL**：`POST {base}/extra_server/weflow/syncGroups?task_white_token=...`
+- **Content-Type**：`application/json`
+
+**请求体字段：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agentId` | string | 是 | 代理/连接实例标识 |
+| `platform` | string | 是 | 平台类型（多平台留位，当前 `weflow`） |
+| `groups[].sessionId` | string | 是 | 群 ID（`xxx@chatroom`），裁决与回写主键 |
+| `groups[].groupName` | string | 否 | 群名 |
+| `groups[].avatarUrl` | string | 否 | 群头像 |
+| `groups[].lastMessageAt` | int | 否 | 该群最近消息时间（秒） |
+
+**请求示例：**
+
+```json
+{
+  "agentId": "weflow:default",
+  "platform": "weflow",
+  "groups": [
+    { "sessionId": "xxx@chatroom", "groupName": "项目群", "avatarUrl": "https://.../g.jpg", "lastMessageAt": 1738713600 }
+  ]
+}
+```
+
+**响应（成功 / 肯定 ACK）：**
+
+```json
+{ "code": 1, "msg": "success", "time": 1750000000, "data": { "allowed": ["xxx@chatroom"] } }
+```
+
+| 返回字段 | 类型 | 说明 |
+|----------|------|------|
+| `data.allowed` | string[] | 可接收推送的群 `sessionId` 集合 |
+
+**语义约定：**
+
+- **白名单**：本次请求里发了、但不在 `data.allowed` 的群 → 代理标记为不推送。
+- 失败（`code!=1`）→ 代理保持该批群原有裁决（不误开），下次连接/增量触发重试。
+- 快照覆盖式声明，本系统按 `agentId+allowed` 全量裁定，无需幂等键。
+- 鉴权与成功判定沿用 §2.2（task_white_token）与 §2.4（`body.code==1` 为成功）。
+
+---
+
 ## 5. 字段映射说明（仅供我方内部参考，对代理透明）
 
 代理只负责"原样直通 + 媒体引用"，无需关心以下映射。本系统内部预期的映射方向（落库逻辑后续实现）：
@@ -495,7 +545,7 @@ public static class WeflowAuth
 | 项 | 说明 |
 |----|------|
 | 是否存在多媒体消息 | 若一条消息含多个媒体，`media` 改为数组（§4.3 注） |
-| `sessionType` 取值集合 | 单聊/群聊的具体枚举值，便于我方映射 |
+| `sessionType` 取值集合 | 已明确：群聊 = `type===2` 或 `username` 以 `@chatroom` 结尾；本期仅转发群聊 |
 | 媒体上传与消息发送的先后与事务 | 确认遵循"先上传媒体拿 file_id → 再发消息引用"（FR-MEDIA-05 事务性） |
 
 ---
