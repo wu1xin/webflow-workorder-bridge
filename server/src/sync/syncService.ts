@@ -5,7 +5,7 @@
 //   - 重连恢复(recovery)                               → 补偿同步：补断连缺口。
 // 落库目标为 queue 表（status=pending），等下游 forwarder 接入后消费（见需求文档 §4/§5、链路文档 §2/§5）。
 import type { ConfigStore } from '../config/store.js'
-import type { WeflowConfig } from '@wb/shared/types'
+import type { WeflowConfig, SyncGroupsResult } from '@wb/shared/types'
 import type { Db } from '../db/database.js'
 import { WeflowRestClient, type WeflowMessage, type WeflowSession, type MessagesPage } from '../weflow/restClient.js'
 import { WeflowAdapter, WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM } from '../weflow/adapter.js'
@@ -50,6 +50,8 @@ export class SyncService implements SyncCoordinator {
     private readonly groupSync?: GroupSyncService
 
     private progress: SyncProgress = idleProgress()
+    /** 手动「立即同步群」自旋锁：防连点重入（与消息同步不互斥） */
+    private groupSyncing = false
 
     constructor(deps: SyncServiceDeps) {
         this.store = deps.store
@@ -90,6 +92,26 @@ export class SyncService implements SyncCoordinator {
         }
         void this.runCompensation(opts.since)
         return { accepted: true, status: this.getStatus() }
+    }
+
+    /**
+     * 手动「立即同步群」（POST /api/weflow/groups/sync）：拉会话 → 群同步 → 回报群总数/放行数。
+     * 复用 runFullSync 的 listSessions→syncGroups 段；与消息同步不互斥（群同步幂等、轻量），
+     * 仅用 groupSyncing 防自身重入。下游失败由 syncAll 内部吞掉并标 failed，调用方重拉列表看各行状态。
+     */
+    syncGroupsNow(): Promise<SyncGroupsResult> {
+        const groupSync = this.groupSync
+        if (!groupSync) return Promise.resolve({ ok: false, error: '未配置下游群同步' })
+        if (this.groupSyncing) return Promise.resolve({ ok: false, error: '群同步进行中' })
+        this.groupSyncing = true
+        return this.createClient(this.cfg()).listSessions()
+            .then(sessions => groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, sessions))
+            .then((): SyncGroupsResult => {
+                const all = this.db.chatGroup.listAll(WEFLOW_CHANNEL_ID)
+                return { ok: true, total: all.length, allowed: all.filter(g => g.pushAllowed).length }
+            })
+            .catch((e: unknown): SyncGroupsResult => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+            .finally(() => { this.groupSyncing = false })
     }
 
     // ── 全量同步（首装） ─────────────────────────────────────────────

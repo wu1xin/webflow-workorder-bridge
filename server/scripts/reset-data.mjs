@@ -11,7 +11,7 @@ const appDataDir = join(process.env.LOCALAPPDATA ?? join(homedir(), '.local', 's
 const dbPath = join(appDataDir, 'bridge.db')
 
 // 业务表全清；meta（仅 schemaVersion）保留——清掉会让下次启动误判版本并触发 DROP 重建。
-const TABLES = ['queue', 'dedup', 'channel_state', 'audit', 'media_cache']
+const TABLES = ['queue', 'dedup', 'channel_state', 'chat_group', 'audit', 'media_cache']
 
 const db = new Database(dbPath)
 const before = {}

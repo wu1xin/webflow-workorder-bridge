@@ -77,3 +77,61 @@ describe('SyncService 全量同步（仅群聊 + 仅放行群）', () => {
         expect(db.queue.countByStatus('pending')).toBe(0)
     })
 })
+
+describe('SyncService.syncGroupsNow（手动立即同步群）', () => {
+    let db: Db
+    beforeEach(() => { db = Db.openMemory() })
+    afterEach(() => db.close())
+
+    it('拉会话→同步→返回群总数与放行数', async () => {
+        const client = stubClient([
+            { username: 'g1@chatroom', type: 2 },
+            { username: 'g2@chatroom', type: 2 },
+            { username: 'wxid_alice', type: 1 },
+        ], {})
+        // 群同步桩：模拟下游只放行 g1
+        const groupSync = {
+            syncAll: (channelId: string, _platform: string, sessions: WeflowSession[]) => {
+                const groups = sessions.filter(s => s.username.endsWith('@chatroom'))
+                for (const g of groups) db.chatGroup.upsertSeen(channelId, WEFLOW_PLATFORM, g.username, {}, 1)
+                db.chatGroup.markSynced(channelId, groups.map(g => g.username), ['g1@chatroom'], 1)
+                return Promise.resolve()
+            },
+        }
+        const svc = new SyncService({ ...deps(db, client), groupSync: groupSync as never })
+        const res = await svc.syncGroupsNow()
+        expect(res).toEqual({ ok: true, total: 2, allowed: 1 })
+    })
+
+    it('未配置 groupSync → ok:false', async () => {
+        const svc = new SyncService({ ...deps(db, stubClient([], {})), groupSync: undefined })
+        const res = await svc.syncGroupsNow()
+        expect(res.ok).toBe(false)
+    })
+
+    it('拉会话失败 → ok:false 且不抛出', async () => {
+        const client = {
+            listSessions: () => Promise.reject(new Error('unreachable')),
+            fetchMessagesPage: () => Promise.resolve({ messages: [], hasMore: false }),
+        }
+        const svc = new SyncService(deps(db, client as never))
+        const res = await svc.syncGroupsNow()
+        expect(res).toEqual({ ok: false, error: 'unreachable' })
+    })
+
+    it('并发重入：第二次被拒', async () => {
+        let release = () => {}
+        const gate = new Promise<void>((r) => { release = r })
+        const client = {
+            listSessions: () => gate.then(() => [] as WeflowSession[]),
+            fetchMessagesPage: () => Promise.resolve({ messages: [], hasMore: false }),
+        }
+        const svc = new SyncService(deps(db, client as never))
+        const p1 = svc.syncGroupsNow()
+        const r2 = await svc.syncGroupsNow()
+        expect(r2.ok).toBe(false)
+        release()
+        const r1 = await p1
+        expect(r1.ok).toBe(true)
+    })
+})

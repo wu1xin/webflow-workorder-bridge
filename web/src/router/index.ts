@@ -10,6 +10,10 @@ const router = createRouter({
         { path: '/test', name: 'test', component: () => import('@/pages/TestPage.vue'), meta: { title: '测试与诊断' } },
         { path: '/logs', name: 'logs', component: () => import('@/pages/LogsPage.vue'), meta: { title: '日志/审计' } },
         { path: '/dlq', name: 'dlq', component: () => import('@/pages/DlqPage.vue'), meta: { title: '死信队列' } },
+        // WeFlow 一级目录（脚手架占位，实际功能后续实现）
+        { path: '/weflow/logs', name: 'weflow-logs', component: () => import('@/pages/weflow/LogsPage.vue'), meta: { title: 'WeFlow / 日志' } },
+        { path: '/weflow/groups', name: 'weflow-groups', component: () => import('@/pages/weflow/GroupsPage.vue'), meta: { title: 'WeFlow / 群组' } },
+        { path: '/weflow/messages', name: 'weflow-messages', component: () => import('@/pages/weflow/MessagesPage.vue'), meta: { title: 'WeFlow / 消息' } },
     ],
 })
 

@@ -20,6 +20,8 @@ import { HttpDownstreamClient } from './downstream/client.js'
 import { GroupSyncService } from './sync/groupSyncService.js'
 import { registerTestRoutes } from './routes/test.js'
 import { registerSyncRoutes } from './routes/sync.js'
+import { registerGroupRoutes } from './routes/groups.js'
+import { registerMessageRoutes } from './routes/messages.js'
 import { type AppContext } from './routes/context.js'
 import { createLogAlertChannel } from './weflow/hooks.js'
 import { registerStatusRoutes } from './routes/status.js'
@@ -71,6 +73,8 @@ registerControlRoutes(app, ctx)
 registerStatusRoutes(app, ctx)
 registerStreamRoutes(app, ctx)
 registerSyncRoutes(app, ctx)
+registerGroupRoutes(app, ctx)
+registerMessageRoutes(app, ctx)
 
 // 生产环境：托管 Vue 构建产物（web/dist）。开发期前端走 Vite dev server（见 web/vite.config.ts 的 /api 代理）。
 const webDist = join(here, '../../web/dist')

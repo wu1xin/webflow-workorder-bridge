@@ -17,13 +17,30 @@
                     :default-active="activeMenu"
                     router
                 >
-                    <el-menu-item
+                    <template
                         v-for="m in menus"
-                        :key="m.path"
-                        :index="m.path"
+                        :key="m.path ?? m.label"
                     >
-                        {{ m.label }}
-                    </el-menu-item>
+                        <el-sub-menu
+                            v-if="m.children"
+                            :index="m.label"
+                        >
+                            <template #title>{{ m.label }}</template>
+                            <el-menu-item
+                                v-for="c in m.children"
+                                :key="c.path"
+                                :index="c.path"
+                            >
+                                {{ c.label }}
+                            </el-menu-item>
+                        </el-sub-menu>
+                        <el-menu-item
+                            v-else
+                            :index="m.path"
+                        >
+                            {{ m.label }}
+                        </el-menu-item>
+                    </template>
                 </el-menu>
             </el-scrollbar>
         </el-aside>
@@ -53,12 +70,26 @@ const configStore = useConfigStore()
 onMounted(() => configStore.connectStatusStream())
 onBeforeUnmount(() => configStore.disconnectStatusStream())
 
-const menus = [
+interface MenuItem {
+    path?: string
+    label: string
+    children?: MenuItem[]
+}
+
+const menus: MenuItem[] = [
     // { path: '/', label: '总览/状态' },
     { path: '/config', label: '配置' },
     // { path: '/test', label: '测试与诊断' },
     // { path: '/logs', label: '日志/审计' },
     // { path: '/dlq', label: '死信队列' },
+    {
+        label: 'WeFlow',
+        children: [
+            { path: '/weflow/logs', label: '日志' },
+            { path: '/weflow/groups', label: '群组' },
+            { path: '/weflow/messages', label: '消息' },
+        ],
+    },
 ]
 </script>
 
