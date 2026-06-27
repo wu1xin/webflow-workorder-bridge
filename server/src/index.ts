@@ -50,9 +50,7 @@ const store = ConfigStore.load()
 const db = Db.open()
 const alert = createLogAlertChannel(app.log)
 const downstreamCfg = store.getDownstream()
-const groupSync = downstreamCfg
-    ? new GroupSyncService({ db, downstream: new HttpDownstreamClient(downstreamCfg, app.log), log: app.log, alert })
-    : undefined
+const groupSync = downstreamCfg ? new GroupSyncService({ db, downstream: new HttpDownstreamClient(downstreamCfg, app.log), log: app.log, alert }) : undefined
 if (!groupSync) app.log.warn('[startup] 未配置 downstream，群同步停用，消息默认不推送')
 const sync = new SyncService({ store, db, log: app.log, alert, groupSync })
 const manager = new WeflowConnectionManager({

@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events'
 import type { ConfigStore } from '../config/store.js'
 import type { WeflowConfig } from '@wb/shared/types'
 import { runConnectionGate, type GateResult } from './gate.js'
-import { SseClient, type SseCloseReason } from './sseClient.js'
+import { SseClient, type SseCloseReason, type SseEvent } from './sseClient.js'
 import type { AlertChannel, SyncCoordinator, SyncReason } from './hooks.js'
 import type { Logger } from './logger.js'
 import type { ReconnectProgress, WeflowConnectionStatus } from './types.js'
@@ -168,6 +168,8 @@ export class WeflowConnectionManager extends EventEmitter {
         this.liveClient = client
         this.everConnected = true
 
+        // 连接保持期间每条 SSE 事件 → 实时回查入库（实时流）
+        client.on('event', (evt: SseEvent) => this.sync.onSseEvent(evt))
         // 运行期掉线（读超时/流错误/服务端结束）→ 触发最终判断
         client.on('close', (closeReason: SseCloseReason) => {
             if (epoch !== this.epoch || this.liveClient !== client) return // 已被新连接取代

@@ -71,7 +71,8 @@ export class ChatGroupStore {
             UPDATE chat_group SET sync_status = 'failed', last_error = @error, updated_at = @now
             WHERE channel_id = @channelId AND conversation_id = @conversationId
         `)
-        this.listStmt = db.prepare('SELECT * FROM chat_group WHERE channel_id = ? ORDER BY last_seen_at DESC')
+        // 放行群置顶（push_allowed DESC：1 在前），同组内按最近可见倒序
+        this.listStmt = db.prepare('SELECT * FROM chat_group WHERE channel_id = ? ORDER BY push_allowed DESC, last_seen_at DESC')
         this.listAllowedStmt = db.prepare(
             'SELECT conversation_id FROM chat_group WHERE channel_id = ? AND push_allowed = 1 ORDER BY conversation_id',
         )

@@ -2,6 +2,7 @@
 // 二者的具体实现分属其它模块（core/compensation、告警通道，见需求文档 §8、§6 两个关键区分），
 // 本连接层只在「连上成功」「掉线/重连失败」时调用挂钩。此处提供仅记日志的桩实现。
 import type { Logger } from './logger.js'
+import type { SseEvent } from './sseClient.js'
 
 /** 连接成功后的同步动作来源：初次连接=全量同步；重连恢复=补偿同步（链路文档 §6） */
 export type SyncReason = 'initial' | 'recovery'
@@ -10,9 +11,11 @@ export type SyncReason = 'initial' | 'recovery'
  * 聊天记录同步协调器。
  * - initial：初次连接成功 → 全量同步 WeFlow 聊天记录到库。
  * - recovery：重连/恢复成功 → 仅补偿断连缺口。
+ * - onSseEvent：连接保持期间，每条 SSE 事件 → 实时回查入库（实时流）。
  */
 export interface SyncCoordinator {
     onConnected(reason: SyncReason): void
+    onSseEvent(evt: SseEvent): void
 }
 
 /** 告警事件（精简版，对齐需求文档 §8 AlertEvent） */
@@ -34,6 +37,9 @@ export function createLogSyncCoordinator(log: Logger): SyncCoordinator {
         onConnected(reason) {
             const action = reason === 'initial' ? '全量同步' : '补偿同步'
             log.info({ reason, action }, `[sync] 连接成功，待执行${action}（占位：等 core/compensation 接入）`)
+        },
+        onSseEvent(evt) {
+            log.debug({ event: evt.event }, '[sync] 收到 SSE 事件（占位：等实时入库接入）')
         },
     }
 }

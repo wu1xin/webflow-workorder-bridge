@@ -11,6 +11,24 @@ export function isWeflowGroup(s: WeflowSession): boolean {
     return s.type === 2 || s.username.endsWith('@chatroom')
 }
 
+/**
+ * 把会话里的群登记入库（仅刷新名称/last_seen、保留下游裁决），返回过滤出的群会话。
+ * 不涉及下游：未配置下游时也应入库，让前端能看到全部群（默认 push_allowed=0）。
+ */
+export function upsertSeenGroups(
+    db: Db,
+    channelId: string,
+    platform: string,
+    sessions: WeflowSession[],
+    now: number,
+): WeflowSession[] {
+    const groups = sessions.filter(isWeflowGroup)
+    for (const g of groups) {
+        db.chatGroup.upsertSeen(channelId, platform, g.username, { groupName: g.displayName ?? null }, now)
+    }
+    return groups
+}
+
 export interface GroupSyncDeps {
     db: Db
     downstream: DownstreamClient
@@ -37,11 +55,8 @@ export class GroupSyncService {
 
     /** 全量：过滤群 → upsert → 发下游 → 回写裁决（无群则不调用下游） */
     syncAll(channelId: string, platform: string, sessions: WeflowSession[]): Promise<void> {
-        const groups = sessions.filter(isWeflowGroup)
         const now = this.clock()
-        for (const g of groups) {
-            this.db.chatGroup.upsertSeen(channelId, platform, g.username, { groupName: g.displayName ?? null }, now)
-        }
+        const groups = upsertSeenGroups(this.db, channelId, platform, sessions, now)
         if (groups.length === 0) return Promise.resolve()
 
         const sentIds = groups.map(g => g.username)
