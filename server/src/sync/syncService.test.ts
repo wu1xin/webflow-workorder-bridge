@@ -272,3 +272,69 @@ describe('SyncService 实时入库（SSE message.new 触发 REST 回查）', () 
         expect(calls).toBe(2) // 第一次 + 合并后的一次补拉，而非 3 次
     })
 })
+
+describe('SyncService 系统消息分发（群改名 localType 10000）', () => {
+    let db: Db
+    beforeEach(() => { db = Db.openMemory() })
+    afterEach(() => db.close())
+
+    /** 收集 syncAll 调用的群快照，便于断言回推内容 */
+    function spyGroupSync() {
+        const calls: Array<{ conv: string, name?: string }> = []
+        return {
+            calls,
+            syncAll: (_ch: string, _pf: string, sessions: WeflowSession[]) => {
+                for (const s of sessions) calls.push({ conv: s.username, name: s.displayName })
+                return Promise.resolve()
+            },
+        }
+    }
+
+    it('放行群收到改名系统消息：以新名回推下游单群', async () => {
+        allowGroup(db, 'proj@chatroom')
+        const client = stubClient([], { 'proj@chatroom': { messages: [
+            { serverId: 's-rename', createTime: 300, localType: 10000, content: '你修改群名为“新群名-18266”' },
+        ], hasMore: false } })
+        const gs = spyGroupSync()
+        const svc = new SyncService({ ...deps(db, client), groupSync: gs as never })
+        await svc.ingestRealtime(sseEvent('proj@chatroom', 300))
+
+        expect(gs.calls).toEqual([{ conv: 'proj@chatroom', name: '新群名-18266' }])
+    })
+
+    it('普通消息不触发回推', async () => {
+        allowGroup(db, 'proj@chatroom')
+        const client = stubClient([], { 'proj@chatroom': { messages: [
+            { serverId: 's1', createTime: 300, content: '一条普通消息' },
+        ], hasMore: false } })
+        const gs = spyGroupSync()
+        const svc = new SyncService({ ...deps(db, client), groupSync: gs as never })
+        await svc.ingestRealtime(sseEvent('proj@chatroom', 300))
+
+        expect(gs.calls).toEqual([])
+    })
+
+    it('重复改名消息只回推一次（绑在新入队上去重）', async () => {
+        allowGroup(db, 'proj@chatroom')
+        const client = stubClient([], { 'proj@chatroom': { messages: [
+            { serverId: 's-rename', createTime: 300, localType: 10000, content: '你修改群名为“N”' },
+        ], hasMore: false } })
+        const gs = spyGroupSync()
+        const svc = new SyncService({ ...deps(db, client), groupSync: gs as never })
+        await svc.ingestRealtime(sseEvent('proj@chatroom', 300))
+        await svc.ingestRealtime(sseEvent('proj@chatroom', 300)) // 同一条 serverId
+
+        expect(gs.calls).toHaveLength(1)
+    })
+
+    it('无 groupSync：改名只更新本地群名', async () => {
+        allowGroup(db, 'proj@chatroom')
+        const client = stubClient([], { 'proj@chatroom': { messages: [
+            { serverId: 's-rename', createTime: 300, localType: 10000, content: '你修改群名为“仅本地名”' },
+        ], hasMore: false } })
+        const svc = new SyncService({ ...deps(db, client), groupSync: undefined })
+        await svc.ingestRealtime(sseEvent('proj@chatroom', 300))
+
+        expect(db.chatGroup.listAll(WEFLOW_CHANNEL_ID)[0].groupName).toBe('仅本地名')
+    })
+})

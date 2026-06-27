@@ -15,6 +15,7 @@ import type { SseEvent } from '../weflow/sseClient.js'
 import type { NormalizedMessage } from '../upstream/types.js'
 import { idleProgress, type SyncProgress } from './types.js'
 import { GroupSyncService, isWeflowGroup, upsertSeenGroups } from './groupSyncService.js'
+import { parseSystemEvent, type SystemEvent } from './systemMessage.js'
 
 /** 补偿默认最大回溯窗口（秒）：默认 24h。超过则告警并截断起点（FR-SYNC-04 / FR-REL-08）。 */
 const MAX_LOOKBACK_SEC = 24 * 60 * 60
@@ -324,7 +325,36 @@ export class SyncService implements SyncCoordinator {
             mediaJson: n.media.length > 0 ? JSON.stringify(n.media) : null,
             ingestPath,
         }, now)
+        // 旁路副作用：系统消息（localType 10000）尝试性解析，识别出已知事件则处理（不影响上面的入队/转发）。
+        // 绑在「新入队」上 → 重复拉取的同一条消息被 dedup 挡住、副作用也只触发一次。
+        this.dispatchSystemEvent(talker, msg, now)
         return { status: 'enqueued', normalized: n }
+    }
+
+    /** 系统消息旁路分发：解析为已知事件后按类型处理；非系统消息/无法识别一律跳过。扩展加新事件在此加 case。 */
+    private dispatchSystemEvent(talker: string, msg: WeflowMessage, now: number): void {
+        const event: SystemEvent | null = parseSystemEvent(msg)
+        if (!event) return
+        switch (event.kind) {
+            case 'group_renamed':
+                this.onGroupRenamed(talker, event.newName, now)
+                break
+        }
+    }
+
+    /**
+     * 群改名：以新名回推下游单群（复用 groupSync.syncAll，其内部先覆盖本地名再发下游、按白名单重新裁决）。
+     * fire-and-forget：错误由 syncAll 内部自吞（标 failed、不误关裁决、告警），不影响落库。
+     * 未配置下游时仅更新本地群名（前端列表可见）。
+     */
+    private onGroupRenamed(conversationId: string, newName: string, now: number): void {
+        this.log.info({ conversationId, newName }, '[sync] 检测到群改名')
+        if (this.groupSync) {
+            const session: WeflowSession = { username: conversationId, displayName: newName, type: 2 }
+            void this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [session])
+            return
+        }
+        this.db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, conversationId, { groupName: newName }, now)
     }
 
     // ── 实时入库（SSE 当触发器 → 回查 REST） ───────────────────────────
