@@ -75,6 +75,16 @@ describe('schema v4', () => {
         ]))
     })
 
+    it('库已是 v4 但 queue 缺 revocable_until（历史半迁移）→ migrate 幂等补列、不报错', () => {
+        // 模拟「版本已跳到 4、列却没补」的坏库：dev 期 tsx watch 在中间态重载留下的状态
+        db.exec('DROP INDEX idx_queue_revoke')
+        db.exec('ALTER TABLE queue DROP COLUMN revocable_until')
+        // 版本保持 4（不回退）
+
+        expect(() => migrate(db)).not.toThrow()
+        expect(columns(db, 'queue')).toContain('revocable_until')
+    })
+
     it('v2→v4 增量升级：补建 chat_group + revocable_until 且保留既有数据', () => {
         // 用迁移好的 v4 库模拟「老 v2 库」：删掉 v3(chat_group)/v4(索引+列) 新增 + 回退版本号 + 塞一条 queue
         db.exec('DROP TABLE chat_group')

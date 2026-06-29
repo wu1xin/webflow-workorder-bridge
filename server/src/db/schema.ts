@@ -150,10 +150,14 @@ export function migrate(db: BetterSqlite3.Database): void {
             db.exec('DELETE FROM meta WHERE key IN (\'installTime\',\'lastSyncTimestamp\',\'lastSyncRawid\')')
         }
 
-        // v2/v3 → v4：queue 已存在但缺 revocable_until，先补列再 exec DDL（DDL 里的部分索引会引用它）。
-        // v0/v1 走上面 DROP+重建分支，由 DDL 直接带出该列，无需 ALTER。
-        if (current >= 2 && current < 4) {
-            db.exec('ALTER TABLE queue ADD COLUMN revocable_until INTEGER')
+        // 确保 queue.revocable_until 存在再 exec DDL（DDL 里的部分索引会引用它）。
+        // 按「列是否存在」判断而非版本号：可自愈历史「版本已跳到 4、列却没补」的半迁移坏库
+        // （dev 期 tsx watch 在中间态重载会留下这种状态）。v0/v1 已在上面 DROP queue，此处查不到表即跳过，由 DDL 重建带出该列。
+        const queueExists = db.prepare('SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?').get('table', 'queue')
+        if (queueExists) {
+            const hasRevocable = (db.pragma('table_info(queue)') as Array<{ name: string }>)
+                .some(c => c.name === 'revocable_until')
+            if (!hasRevocable) db.exec('ALTER TABLE queue ADD COLUMN revocable_until INTEGER')
         }
 
         db.exec(DDL)
