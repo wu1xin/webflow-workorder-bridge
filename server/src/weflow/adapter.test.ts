@@ -32,11 +32,20 @@ describe('WeflowAdapter', () => {
         expect(n.externalId).toBe('42')
     })
 
-    it('含媒体时产出 media 描述符', () => {
-        const n = adapter.normalize({ talker: 'alice', message: msg({ mediaType: 'image', mediaFileName: 'a.png', mediaUrl: 'http://x/a.png' }) })
+    it('含媒体时产出 media 描述符（按 localType 判定，mediaKey 取 serverId）', () => {
+        const n = adapter.normalize({ talker: 'alice', message: msg({ localType: 3, mediaFileName: 'a.png', mediaUrl: 'http://x/a.png' }) })
         expect(n.media).toHaveLength(1)
-        expect(n.media[0].mediaKey).toBe('srv-1:a.png')
+        expect(n.media[0].mediaKey).toBe('srv-1')
+        expect(n.media[0].mediaType).toBe('image')
         expect(n.media[0].fileName).toBe('a.png')
         expect(n.media[0].sourceRef).toBe('http://x/a.png')
+    })
+
+    it('媒体未就绪（media* 字段缺失）仍按 localType 判为媒体，sourceRef 为 null', () => {
+        const n = adapter.normalize({ talker: 'alice', message: msg({ localType: 43 }) })
+        expect(n.media).toHaveLength(1)
+        expect(n.media[0].mediaType).toBe('video')
+        expect(n.media[0].fileName).toBeNull()
+        expect(n.media[0].sourceRef).toBeNull()
     })
 })

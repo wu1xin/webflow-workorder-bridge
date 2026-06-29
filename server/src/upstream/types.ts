@@ -1,10 +1,15 @@
 // 上游适配器抽象：把任意平台的原始消息翻成 bridge 的归一化信封（设计文档 §4）。
 // 这是「未知结构」与「稳定 schema」之间的唯一翻译层。
 
+/** 归一化媒体类型词汇表（跨平台稳定枚举；各平台适配器负责映射到此） */
+export type MediaType = 'image' | 'voice' | 'video' | 'emoji' | 'file'
+
 /** 归一化附件描述符（落 queue.media_json 的单个元素） */
 export interface MediaDescriptor {
     /** 媒体幂等键，对应 media_cache 的 (channel_id, media_key) */
     mediaKey: string
+    /** 归一化媒体类型（按上游语义判定，与文件是否已就绪无关） */
+    mediaType: MediaType
     /** 原始文件名（可空：语音/贴纸等可能无名） */
     fileName: string | null
     /** MIME 类型 */

@@ -43,4 +43,16 @@ describe('WeflowRestClient.fetchMessagesPage — end 参数', () => {
             expect(u.searchParams.has('end')).toBe(false)
         })
     })
+
+    it('恒带 media 开关参数，否则上游不返回 media* 字段', () => {
+        const { urls } = stubFetch()
+        return new WeflowRestClient(CFG).fetchMessagesPage('g@chatroom', 0, 0).then(() => {
+            const u = new URL(urls[0])
+            expect(u.searchParams.get('media')).toBe('1')
+            expect(u.searchParams.get('image')).toBe('1')
+            expect(u.searchParams.get('voice')).toBe('1')
+            expect(u.searchParams.get('video')).toBe('1')
+            expect(u.searchParams.get('emoji')).toBe('1')
+        })
+    })
 })

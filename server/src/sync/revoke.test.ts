@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { isRevokeRow, isFileMessage, computeRevocableUntil } from './revoke.js'
+import { isRevokeRow, computeRevocableUntil } from './revoke.js'
 
 // 真实样本（用户实测）：撤回行原地改写、文件 localType 打包整数
 const REVOKE_RAW = '<?xml version="1.0"?><sysmsg type="revokemsg"><revokemsg><content>"无心" 撤回了一条消息</content><revoketime>0</revoketime></revokemsg></sysmsg>'
 const PDF_RAW = 'wxid_x:\n<?xml version="1.0"?>\n<msg>\n\t<appmsg appid="wx" sdkver="0">\n\t\t<title>x.pdf</title>\n\t\t<type>6</type>\n\t\t<appattach>\n\t\t\t<totallen>35624</totallen>\n\t\t\t<fileext>pdf</fileext>\n\t\t</appattach>\n\t</appmsg>\n</msg>\n'
-const IMG_RAW = '<?xml version="1.0"?><msg><img length="74592" aeskey="x"/><commenturl/></msg>'
 
 describe('isRevokeRow — 撤回行识别', () => {
     it('localType 10000 + revokemsg sysmsg → true', () => {
@@ -25,30 +24,6 @@ describe('isRevokeRow — 撤回行识别', () => {
 
     it('文件消息（大整数 localType）→ false（不会被当撤回）', () => {
         expect(isRevokeRow({ localType: 25769803825, content: PDF_RAW, rawContent: PDF_RAW })).toBe(false)
-    })
-})
-
-describe('isFileMessage — 文件消息判定', () => {
-    it('PDF：localType (6<<32)|49 + <appattach><fileext> → true', () => {
-        expect(isFileMessage({ localType: 25769803825, content: PDF_RAW, rawContent: PDF_RAW })).toBe(true)
-    })
-
-    it('图片 localType 3 → false', () => {
-        expect(isFileMessage({ localType: 3, content: '[图片]', rawContent: IMG_RAW })).toBe(false)
-    })
-
-    it('表情 localType 47 → false', () => {
-        expect(isFileMessage({ localType: 47, content: '[表情]', rawContent: '<msg><emoji/></msg>' })).toBe(false)
-    })
-
-    it('文字 localType 1 → false', () => {
-        expect(isFileMessage({ localType: 1, content: '1', rawContent: 'wxid_x:\n1' })).toBe(false)
-    })
-
-    it('链接 appmsg（type 5）→ false（仅文件 type 6 才算）', () => {
-        const linkRaw = '<msg><appmsg><type>5</type><url>http://x</url></appmsg></msg>'
-        // (5<<32)|49 = 21474836529
-        expect(isFileMessage({ localType: 21474836529, content: linkRaw, rawContent: linkRaw })).toBe(false)
     })
 })
 

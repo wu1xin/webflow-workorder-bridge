@@ -7,6 +7,13 @@ import { baseUrl, redactToken } from './types.js'
 /** REST 数据拉取超时（毫秒）：本机回环、单页有限，给足下载时间 */
 const REST_TIMEOUT_MS = 60_000
 
+/**
+ * 媒体开关参数：不带这些上游不返回 mediaType/mediaFileName/mediaUrl（实测）。
+ * 注意 media* 字段是 WeFlow 缓存就绪后才有的最终一致结果，「是不是媒体」仍以 localType 判定（见 mediaType.ts）。
+ * 文件类导出参数未知（详见 docs/plans/2026-06-29-媒体判断口径修正-design.md 待验证项），暂不带。
+ */
+const MEDIA_PARAMS: Record<string, number> = { media: 1, image: 1, voice: 1, video: 1, emoji: 1 }
+
 /** 会话（/api/v1/sessions 单项，宽松取用） */
 export interface WeflowSession {
     username: string
@@ -92,7 +99,7 @@ export class WeflowRestClient {
      * @param end    结束时间（秒级时间戳；省略=不限上界）。撤回对账文件探针用 start≈end 精确探一行。
      */
     async fetchMessagesPage(talker: string, start: number, offset: number, limit = 1_000, end?: number): Promise<MessagesPage> {
-        const params: Record<string, string | number> = { talker, offset, limit }
+        const params: Record<string, string | number> = { talker, offset, limit, ...MEDIA_PARAMS }
         if (start > 0) params.start = start
         if (end !== undefined && end > 0) params.end = end
         const data = await this.getJson('/api/v1/messages', params) as {

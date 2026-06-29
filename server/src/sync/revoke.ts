@@ -3,18 +3,12 @@
 //
 // 关键事实：
 //   - 撤回是「原地改写」——同 serverId 的那行 localType 翻成 10000、content 变 revokemsg sysmsg。
-//   - localType 是打包整数：低 32 位=基础类型，高 32 位=appmsg 子类型；文件 = (6<<32)|49。
-//   - 撤回时限按类型分桶：普通消息 2min、文件消息 3h。
+//   - 撤回时限按类型分桶：普通消息 2min、文件消息 3h（文件判定见 mediaType.isFileMessage）。
 import type { WeflowMessage } from '../weflow/restClient.js'
+import { bodyText, isFileMessage } from '../weflow/mediaType.js'
 
 /** 系统消息 localType（撤回行、群提示等恒为此未打包小整数） */
 const SYSTEM_LOCAL_TYPE = 10000
-/** appmsg 基础类型（localType 低 32 位） */
-const APPMSG_BASE_TYPE = 49
-/** appmsg 文件子类型（localType 高 32 位 / XML 内 <type>） */
-const FILE_APP_TYPE = 6
-/** 32 位进位，用于拆分打包的 localType */
-const U32 = 2 ** 32
 
 /** 撤回时限（秒）：普通消息 2min */
 const NORMAL_WINDOW_SEC = 2 * 60
@@ -31,13 +25,6 @@ export const NEAR_REVOKE_WINDOW_SEC = NORMAL_WINDOW_SEC + REVOKE_GRACE_SEC
 
 /** 撤回行：<sysmsg type="revokemsg"> */
 const REVOKE_RE = /<sysmsg[^>]*type=["']revokemsg/
-/** 文件附件：appmsg 里带 <appattach>…<fileext> */
-const FILE_ATTACH_RE = /<appattach>[\s\S]*?<fileext>/
-
-/** 取消息原文（rawContent 优先，回退 content）用于正则识别 */
-function bodyText(msg: WeflowMessage): string {
-    return `${msg.rawContent ?? ''}\n${msg.content ?? ''}`
-}
 
 /**
  * 是否撤回行：localType 恒为系统消息小整数 10000，且原文命中 revokemsg sysmsg。
@@ -45,21 +32,6 @@ function bodyText(msg: WeflowMessage): string {
  */
 export function isRevokeRow(msg: WeflowMessage): boolean {
     return msg.localType === SYSTEM_LOCAL_TYPE && REVOKE_RE.test(bodyText(msg))
-}
-
-/**
- * 是否文件消息（享 3h 撤回窗口）。双保险：
- *   1) localType 低 32 位=49(appmsg)、高 32 位=6(文件子类型)；
- *   2) 原文里带 <appattach>…<fileext>。
- * 链接 appmsg(type 5) 等不算。
- */
-export function isFileMessage(msg: WeflowMessage): boolean {
-    const lt = msg.localType
-    if (typeof lt !== 'number') return false
-    const low = lt % U32
-    const sub = Math.floor(lt / U32)
-    if (low !== APPMSG_BASE_TYPE || sub !== FILE_APP_TYPE) return false
-    return FILE_ATTACH_RE.test(bodyText(msg))
 }
 
 /**
