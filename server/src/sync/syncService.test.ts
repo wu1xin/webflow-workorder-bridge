@@ -338,3 +338,114 @@ describe('SyncService 系统消息分发（群改名 localType 10000）', () => 
         expect(db.chatGroup.listAll(WEFLOW_CHANNEL_ID)[0].groupName).toBe('仅本地名')
     })
 })
+
+describe('SyncService 撤回检测（revocable_until 看守 + 对账扫描）', () => {
+    const REVOKE_RAW = '<?xml version="1.0"?><sysmsg type="revokemsg"><revokemsg><content>"无心" 撤回了一条消息</content></revokemsg></sysmsg>'
+    let db: Db
+    beforeEach(() => { db = Db.openMemory() })
+    afterEach(() => db.close())
+
+    /** 直接埋一条「看守中」的已入队消息（revocable_until > now），免去走实时入库的铺垫 */
+    function enqueueWatch(conv: string, serverId: string, revocableUntil: number, msgTs: number) {
+        db.queue.enqueue({
+            channelId: WEFLOW_CHANNEL_ID, platform: WEFLOW_PLATFORM, eventType: 'message.new',
+            externalId: serverId, conversationId: conv, senderId: 'u', msgTimestamp: msgTs,
+            hasMedia: 0, rawJson: '{}', mediaJson: null, ingestPath: 'sse', revocableUntil,
+        }, msgTs)
+    }
+    function revokeRow(serverId: string, createTime: number) {
+        return { serverId, localType: 10000, createTime, content: REVOKE_RAW, rawContent: REVOKE_RAW }
+    }
+    function revokeEvents() {
+        return db.queue.list(WEFLOW_CHANNEL_ID, {}, 50, 0).items.filter(i => i.eventType === 'message.revoke')
+    }
+
+    it('看守中的消息变成撤回态 → 入队 message.revoke(reconcile) 并清看守', async () => {
+        const NOW = Math.floor(Date.now() / 1000)
+        allowGroup(db, 'g@chatroom')
+        enqueueWatch('g@chatroom', 's1', NOW + 150, NOW)
+        const client = stubClient([], { 'g@chatroom': { messages: [revokeRow('s1', NOW)], hasMore: false } })
+        const svc = new SyncService(deps(db, client))
+
+        await svc.reconcileRevokes()
+
+        const ev = revokeEvents()
+        expect(ev).toHaveLength(1)
+        expect(ev[0].conversationId).toBe('g@chatroom')
+        expect(ev[0].ingestPath).toBe('reconcile')
+        expect(db.queue.getById(WEFLOW_CHANNEL_ID, ev[0].id)?.rawJson).toContain('s1')
+        // 看守已清，不再重复扫
+        expect(db.queue.listOpenRevokeWatches(WEFLOW_CHANNEL_ID, NOW)).toEqual([])
+    })
+
+    it('撤回事件只入队一次（重复对账不重复入队）', async () => {
+        const NOW = Math.floor(Date.now() / 1000)
+        allowGroup(db, 'g@chatroom')
+        enqueueWatch('g@chatroom', 's1', NOW + 150, NOW)
+        const client = stubClient([], { 'g@chatroom': { messages: [revokeRow('s1', NOW)], hasMore: false } })
+        const svc = new SyncService(deps(db, client))
+
+        await svc.reconcileRevokes()
+        await svc.reconcileRevokes()
+
+        expect(revokeEvents()).toHaveLength(1)
+    })
+
+    it('看守中的消息未被撤回 → 不产出、看守保留', async () => {
+        const NOW = Math.floor(Date.now() / 1000)
+        allowGroup(db, 'g@chatroom')
+        enqueueWatch('g@chatroom', 's1', NOW + 150, NOW)
+        const client = stubClient([], { 'g@chatroom': { messages: [{ serverId: 's1', createTime: NOW, content: '1' }], hasMore: false } })
+        const svc = new SyncService(deps(db, client))
+
+        await svc.reconcileRevokes()
+
+        expect(revokeEvents()).toHaveLength(0)
+        expect(db.queue.listOpenRevokeWatches(WEFLOW_CHANNEL_ID, NOW).map(w => w.externalId)).toEqual(['s1'])
+    })
+
+    it('无任何看守 → 不发 REST', async () => {
+        let calls = 0
+        const client = {
+            listSessions: () => Promise.resolve([] as WeflowSession[]),
+            fetchMessagesPage: () => { calls += 1; return Promise.resolve({ messages: [], hasMore: false }) },
+        }
+        const svc = new SyncService(deps(db, client as never))
+        await svc.reconcileRevokes()
+        expect(calls).toBe(0)
+    })
+
+    it('文件消息（超出近窗、仍在 3h 窗口）→ 定向探针 start≈end 探到撤回', async () => {
+        const NOW = Math.floor(Date.now() / 1000)
+        allowGroup(db, 'g@chatroom')
+        // 文件消息 createTime 在近窗(150s)之外，但仍在 3h 撤回窗口内
+        enqueueWatch('g@chatroom', 'f1', NOW + 3 * 3600, NOW - 200)
+        const client = {
+            listSessions: () => Promise.resolve([] as WeflowSession[]),
+            // 近窗粗拉（无 end）返回空；定向探针（带 end）返回撤回态
+            fetchMessagesPage: (_t: string, _s: number, _o: number, _l?: number, end?: number) =>
+                Promise.resolve(end !== undefined
+                    ? { messages: [revokeRow('f1', NOW - 200)], hasMore: false }
+                    : { messages: [], hasMore: false }),
+        }
+        const svc = new SyncService(deps(db, client as never))
+
+        await svc.reconcileRevokes()
+
+        const ev = revokeEvents()
+        expect(ev).toHaveLength(1)
+        expect(db.queue.getById(WEFLOW_CHANNEL_ID, ev[0].id)?.rawJson).toContain('f1')
+    })
+
+    it('ingestOne 跳过撤回行：撤回 sysmsg 不会被当普通消息入队', async () => {
+        const NOW = Math.floor(Date.now() / 1000)
+        allowGroup(db, 'g@chatroom')
+        // 回查只返回一条「从未见过的 serverId 的撤回行」（模拟全量拉到历史撤回）
+        const client = stubClient([], { 'g@chatroom': { messages: [revokeRow('hist', NOW)], hasMore: false } })
+        const svc = new SyncService(deps(db, client))
+
+        await svc.ingestRealtime(sseEvent('g@chatroom', NOW))
+
+        expect(db.queue.countByStatus('pending')).toBe(0)
+    })
+})

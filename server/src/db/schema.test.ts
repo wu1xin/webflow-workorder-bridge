@@ -9,26 +9,43 @@ function exists(db: BetterSqlite3.Database, name: string): boolean {
     return db.prepare('SELECT 1 FROM sqlite_master WHERE name = ?').get(name) !== undefined
 }
 
-describe('schema v3', () => {
+describe('schema v4', () => {
     let db: BetterSqlite3.Database
     beforeEach(() => { db = new BetterSqlite3(':memory:'); migrate(db) })
     afterEach(() => db.close())
 
-    it('SCHEMA_VERSION 为 3 且写入 meta', () => {
-        expect(SCHEMA_VERSION).toBe(3)
+    it('SCHEMA_VERSION 为 4 且写入 meta', () => {
+        expect(SCHEMA_VERSION).toBe(4)
         const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(row.value).toBe('3')
+        expect(row.value).toBe('4')
     })
 
-    it('queue 含归一化信封列，且不再有旧 source 列', () => {
+    it('queue 含归一化信封列 + revocable_until，且不再有旧 source 列', () => {
         const cols = columns(db, 'queue')
         expect(cols).toEqual(expect.arrayContaining([
             'channel_id', 'platform', 'event_type', 'external_id', 'conversation_id',
             'sender_id', 'msg_timestamp', 'has_media', 'raw_json', 'media_json', 'ingest_path',
+            'revocable_until',
         ]))
         expect(cols).not.toContain('source')
         expect(cols).not.toContain('data_json')
         expect(cols).not.toContain('file_json')
+    })
+
+    it('v3→v4 增量升级：queue 补 revocable_until 且保留既有数据', () => {
+        // 用迁移好的 v4 库模拟「老 v3 库」：先删依赖列的部分索引、再删列 + 回退版本号 + 塞一条 queue
+        db.exec('DROP INDEX idx_queue_revoke')
+        db.exec('ALTER TABLE queue DROP COLUMN revocable_until')
+        db.prepare('UPDATE meta SET value = ? WHERE key = ?').run('3', 'schemaVersion')
+        db.prepare(`INSERT INTO queue(channel_id, platform, raw_json, ingest_path, status, attempts, created_at, updated_at)
+                    VALUES ('weflow:default','weflow','{}','catchup','pending',0,1,1)`).run()
+
+        migrate(db)
+
+        expect(columns(db, 'queue')).toContain('revocable_until')
+        expect(db.prepare('SELECT COUNT(*) c FROM queue').get()).toEqual({ c: 1 })
+        const ver = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
+        expect(ver.value).toBe('4')
     })
 
     it('dedup 主键为 channel_id + dedup_key', () => {
@@ -58,9 +75,11 @@ describe('schema v3', () => {
         ]))
     })
 
-    it('v2→v3 增量升级：补建 chat_group 且保留既有数据', () => {
-        // 用迁移好的 v3 库模拟「老 v2 库」：删掉新表 + 回退版本号 + 塞一条 queue
+    it('v2→v4 增量升级：补建 chat_group + revocable_until 且保留既有数据', () => {
+        // 用迁移好的 v4 库模拟「老 v2 库」：删掉 v3(chat_group)/v4(索引+列) 新增 + 回退版本号 + 塞一条 queue
         db.exec('DROP TABLE chat_group')
+        db.exec('DROP INDEX idx_queue_revoke')
+        db.exec('ALTER TABLE queue DROP COLUMN revocable_until')
         db.prepare('UPDATE meta SET value = ? WHERE key = ?').run('2', 'schemaVersion')
         db.prepare(`INSERT INTO queue(channel_id, platform, raw_json, ingest_path, status, attempts, created_at, updated_at)
                     VALUES ('weflow:default','weflow','{}','catchup','pending',0,1,1)`).run()
@@ -68,12 +87,13 @@ describe('schema v3', () => {
         migrate(db)
 
         expect(exists(db, 'chat_group')).toBe(true)
+        expect(columns(db, 'queue')).toContain('revocable_until')
         expect(db.prepare('SELECT COUNT(*) c FROM queue').get()).toEqual({ c: 1 })
         const ver = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(ver.value).toBe('3')
+        expect(ver.value).toBe('4')
     })
 
-    it('v1→v3 升级路径：DROP 旧表并清理旧水位键', () => {
+    it('v1→v4 升级路径：DROP 旧表并清理旧水位键', () => {
         const v1 = new BetterSqlite3(':memory:')
         v1.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)')
         v1.exec('CREATE TABLE queue (id INTEGER PRIMARY KEY, source TEXT, data_json TEXT)')
@@ -92,7 +112,7 @@ describe('schema v3', () => {
         expect(keys).not.toContain('lastSyncTimestamp')
         expect(keys).not.toContain('lastSyncRawid')
         const ver = v1.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(ver.value).toBe('3')
+        expect(ver.value).toBe('4')
         v1.close()
     })
 })

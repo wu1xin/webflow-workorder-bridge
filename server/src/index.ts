@@ -93,6 +93,7 @@ app.listen({
     port: PORT,
 }).then(() => {
     manager.start() // 服务起来后发起 WeFlow 连接
+    sync.startReconcileLoop() // 撤回对账周期扫描：无看守时零 REST，有看守才复查（见撤回检测设计）
 }).catch((err) => {
     app.log.error(err)
     process.exit(1)

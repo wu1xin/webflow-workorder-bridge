@@ -1,13 +1,15 @@
 // WeFlow 上游连接管理器：状态机 + 初次连接 + 运行期掉线最终判断 + 固定间隔重连循环。
 // 完整逻辑见 docs/weflow-链路连接逻辑（仅上游）.md（§1 未配置、§2 初次、§3 运行中、§4 重连循环、§5 恢复）。
 //
-// 三个连接场景都复用三级判定闸门（runConnectionGate），区别只在「失败后是否记日志/告警/重连」：
-//   - 初次保存并连接：失败仅报前端，不记日志/告警/重连（交还给人）。
+// 连接场景都复用三级判定闸门（runConnectionGate），区别只在「失败后是否记日志/告警/重连」：
+//   - 手动保存/重连（config/manual）首次失败：仅报前端，不记日志/告警/重连（交还给人）。
+//   - 开机自启（boot）首次失败且属上游未就绪类（见 BOOT_RETRYABLE_DIAGNOSES）：无人盯屏，
+//     不交还给人，直接进等待重连循环，上游后起也能自连（token_invalid 等硬错误仍交还给人）。
 //   - 运行中掉线最终判断：失败一律记日志 + 告警，并自动进入重连循环。
 //   - 重连循环：固定 intervalSec 重跑，每 logIntervalSec 汇总一条日志，直到连回。
 import { EventEmitter } from 'node:events'
 import type { ConfigStore } from '../config/store.js'
-import type { WeflowConfig } from '@wb/shared/types'
+import type { WeflowConfig, WeflowConnectDiagnosis } from '@wb/shared/types'
 import { runConnectionGate, type GateResult } from './gate.js'
 import { SseClient, type SseCloseReason, type SseEvent } from './sseClient.js'
 import type { AlertChannel, SyncCoordinator, SyncReason } from './hooks.js'
@@ -19,6 +21,17 @@ import { WeflowConnectionState } from '@wb/shared/constants'
 
 /** 触发一次（重）连接的来源 */
 type RestartTrigger = 'boot' | 'config' | 'manual'
+
+/**
+ * 开机自启（boot）首探失败时，属「上游侧尚未就绪 / 网络抖动」可自愈类，
+ * 不交还给人（无人盯屏），改为进入等待重连循环，上游起来后自动连上。
+ * 唯独 token 失效（token_invalid）是硬配置错误，重试无意义，仍停失败态等人工。
+ */
+const BOOT_RETRYABLE_DIAGNOSES = new Set<WeflowConnectDiagnosis>([
+    'weflow_not_ready',
+    'connected_no_push',
+    'error',
+])
 
 /** 秒级 Unix 时间戳 */
 function nowSec(): number {
@@ -139,7 +152,7 @@ export class WeflowConnectionManager extends EventEmitter {
         }
 
         if (result.ok) {
-            this.onConnected(result, this.everConnected ? 'recovery' : 'initial', epoch)
+            this.onConnected(result, this.syncReason(), epoch)
             return
         }
 
@@ -153,10 +166,20 @@ export class WeflowConnectionManager extends EventEmitter {
                 message: `${result.failureLabel ?? result.diagnosis}：${result.message}`,
             })
             this.enterReconnectLoop(result, epoch)
+        } else if (trigger === 'boot' && BOOT_RETRYABLE_DIAGNOSES.has(result.diagnosis)) {
+            // 开机自启时上游尚未就绪：无人盯屏，不交还给人，进入等待重连循环，
+            // 上游起来后某轮闸门通过即自动连上（首次成功=全量同步）。不记错误日志/不告警（§2）。
+            this.log.info({ diagnosis: result.diagnosis }, '[weflow] 启动时上游未就绪，进入等待重连循环')
+            this.enterReconnectLoop(result, epoch)
         } else {
-            // 初次连接失败：仅报前端，不记日志/告警/重连，交还给人（§2）
+            // 手动保存/重连失败，或 token 失效等需人工的硬错误：仅报前端，交还给人（§2）
             this.setFailedState(result)
         }
+    }
+
+    /** 本次连接成功该走的同步：从未连上过=全量(initial)，否则=补偿(recovery)（§6） */
+    private syncReason(): SyncReason {
+        return this.everConnected ? 'recovery' : 'initial'
     }
 
     /** 三级全过：转入「已连接 · 接收中」，挂监听，按场景触发同步（§2 全量 / §5 补偿） */
@@ -210,7 +233,7 @@ export class WeflowConnectionManager extends EventEmitter {
         }
         if (result.ok) {
             this.log.info('[weflow] 最终判断三级全过，直接连回（恢复）')
-            this.onConnected(result, 'recovery', epoch)
+            this.onConnected(result, this.syncReason(), epoch)
             return
         }
         this.logFailure('最终判断失败', result, 'boot')
@@ -268,7 +291,7 @@ export class WeflowConnectionManager extends EventEmitter {
 
         if (result.ok) {
             this.log.info('[weflow] 重连成功，恢复连接')
-            this.onConnected(result, 'recovery', epoch)
+            this.onConnected(result, this.syncReason(), epoch)
             return
         }
 

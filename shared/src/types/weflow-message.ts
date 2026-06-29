@@ -3,8 +3,8 @@
 
 /** 转发队列状态机 */
 export type WeflowMessageStatus = 'pending' | 'sending' | 'done' | 'dead'
-/** 采集路径：sse 实时 | catchup 补偿 */
-export type WeflowIngestPath = 'sse' | 'catchup'
+/** 采集路径：sse 实时 | catchup 补偿 | reconcile 撤回对账 */
+export type WeflowIngestPath = 'sse' | 'catchup' | 'reconcile'
 
 /** 列表行（不含 rawJson） */
 export interface WeflowMessageSummary {

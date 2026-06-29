@@ -27,8 +27,17 @@ export interface EnqueueInput {
     rawJson: string
     /** 归一化附件列表 JSON 数组；无附件为 null */
     mediaJson: string | null
-    /** 采集路径：sse 实时 | catchup 补偿 */
-    ingestPath: 'sse' | 'catchup'
+    /** 采集路径：sse 实时 | catchup 补偿 | reconcile 撤回对账 */
+    ingestPath: WeflowIngestPath
+    /** 撤回看守截止（秒）：仍可能被撤回则非空，过期/系统消息/撤回事件本身为 null */
+    revocableUntil: number | null
+}
+
+/** 撤回对账扫描的一条看守行（revocable_until 仍 > now） */
+export interface RevokeWatch {
+    conversationId: string | null
+    externalId: string | null
+    msgTimestamp: number | null
 }
 
 /** 列表过滤条件（全部可选；缺省项不过滤） */
@@ -87,16 +96,18 @@ export class QueueStore {
     private readonly listStmt: BetterSqlite3.Statement
     private readonly listCountStmt: BetterSqlite3.Statement
     private readonly getByIdStmt: BetterSqlite3.Statement
+    private readonly listWatchesStmt: BetterSqlite3.Statement
+    private readonly clearWatchStmt: BetterSqlite3.Statement
 
     constructor(db: BetterSqlite3.Database) {
         this.insertStmt = db.prepare(`
             INSERT INTO queue(
               channel_id, platform, event_type, external_id, conversation_id, sender_id,
-              msg_timestamp, has_media, raw_json, media_json, ingest_path,
+              msg_timestamp, has_media, raw_json, media_json, ingest_path, revocable_until,
               status, attempts, created_at, updated_at
             ) VALUES (
               @channelId, @platform, @eventType, @externalId, @conversationId, @senderId,
-              @msgTimestamp, @hasMedia, @rawJson, @mediaJson, @ingestPath,
+              @msgTimestamp, @hasMedia, @rawJson, @mediaJson, @ingestPath, @revocableUntil,
               'pending', 0, @now, @now
             )
         `)
@@ -110,11 +121,39 @@ export class QueueStore {
         `)
         this.listCountStmt = db.prepare(`SELECT COUNT(*) AS c FROM queue WHERE ${FILTER_WHERE}`)
         this.getByIdStmt = db.prepare('SELECT * FROM queue WHERE channel_id = ? AND id = ?')
+        // 撤回对账：只取仍在撤回窗口内的看守行（部分索引 idx_queue_revoke 支撑）
+        this.listWatchesStmt = db.prepare(`
+            SELECT conversation_id, external_id, msg_timestamp FROM queue
+            WHERE channel_id = ? AND revocable_until > ?
+            ORDER BY id
+        `)
+        this.clearWatchStmt = db.prepare(
+            'UPDATE queue SET revocable_until = NULL WHERE channel_id = ? AND external_id = ?',
+        )
     }
 
     /** 入队一条 pending 消息 */
     enqueue(input: EnqueueInput, now: number): void {
         this.insertStmt.run({ ...input, now })
+    }
+
+    /** 列出某 channel 仍在撤回窗口内（revocable_until > now）的看守行，供对账扫描定位待复查消息 */
+    listOpenRevokeWatches(channelId: string, now: number): RevokeWatch[] {
+        const rows = this.listWatchesStmt.all(channelId, now) as Array<{
+            conversation_id: string | null
+            external_id: string | null
+            msg_timestamp: number | null
+        }>
+        return rows.map(r => ({
+            conversationId: r.conversation_id,
+            externalId: r.external_id,
+            msgTimestamp: r.msg_timestamp,
+        }))
+    }
+
+    /** 撤回检出后清掉该 serverId 的看守（revocable_until 置 NULL），停止后续重复探测 */
+    clearRevokeWatch(channelId: string, externalId: string): void {
+        this.clearWatchStmt.run(channelId, externalId)
     }
 
     /** 某状态的队列条数（默认 pending），用于状态快照展示积压 */

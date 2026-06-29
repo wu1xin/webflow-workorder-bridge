@@ -89,10 +89,12 @@ export class WeflowRestClient {
      * @param start  开始时间（秒级时间戳；0 表示不限，从最早）
      * @param offset 分页偏移
      * @param limit  每页条数
+     * @param end    结束时间（秒级时间戳；省略=不限上界）。撤回对账文件探针用 start≈end 精确探一行。
      */
-    async fetchMessagesPage(talker: string, start: number, offset: number, limit = 1_000): Promise<MessagesPage> {
+    async fetchMessagesPage(talker: string, start: number, offset: number, limit = 1_000, end?: number): Promise<MessagesPage> {
         const params: Record<string, string | number> = { talker, offset, limit }
         if (start > 0) params.start = start
+        if (end !== undefined && end > 0) params.end = end
         const data = await this.getJson('/api/v1/messages', params) as {
             messages?: WeflowMessage[]
             hasMore?: boolean

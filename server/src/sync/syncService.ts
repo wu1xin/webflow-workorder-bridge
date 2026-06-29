@@ -13,14 +13,18 @@ import type { AlertChannel, SyncCoordinator, SyncReason } from '../weflow/hooks.
 import type { Logger } from '../weflow/logger.js'
 import type { SseEvent } from '../weflow/sseClient.js'
 import type { NormalizedMessage } from '../upstream/types.js'
+import type { RevokeWatch } from '../db/queue.js'
 import { idleProgress, type SyncProgress } from './types.js'
 import { GroupSyncService, isWeflowGroup, upsertSeenGroups } from './groupSyncService.js'
 import { parseSystemEvent, type SystemEvent } from './systemMessage.js'
+import { isRevokeRow, computeRevocableUntil, NEAR_REVOKE_WINDOW_SEC } from './revoke.js'
 
 /** 补偿默认最大回溯窗口（秒）：默认 24h。超过则告警并截断起点（FR-SYNC-04 / FR-REL-08）。 */
 const MAX_LOOKBACK_SEC = 24 * 60 * 60
 /** 每页拉取条数 */
 const PAGE_SIZE = 1_000
+/** 撤回对账扫描间隔（秒）：远小于普通消息 2min 撤回窗口，保证窗口内能扫到几轮 */
+const RECONCILE_INTERVAL_SEC = 30
 
 function nowSec(): number {
     return Math.floor(Date.now() / 1000)
@@ -58,7 +62,7 @@ export function parseRealtimeTrigger(data: string): RealtimeTrigger | null {
 /** 同步所需的 WeFlow 拉取能力（便于测试注入桩） */
 export interface WeflowClientLike {
     listSessions(): Promise<WeflowSession[]>
-    fetchMessagesPage(talker: string, start: number, offset: number, limit?: number): Promise<MessagesPage>
+    fetchMessagesPage(talker: string, start: number, offset: number, limit?: number, end?: number): Promise<MessagesPage>
 }
 
 export interface SyncServiceDeps {
@@ -88,6 +92,8 @@ export class SyncService implements SyncCoordinator {
     private readonly realtimeLoops = new Map<string, Promise<void>>()
     /** 实时回查：每会话「下一轮待拉起点」（talker → start 秒），多条同群事件取 min 合并 */
     private readonly realtimeNext = new Map<string, number>()
+    /** 撤回对账周期扫描定时器（startReconcileLoop 启、stopReconcileLoop 停） */
+    private reconcileTimer: NodeJS.Timeout | null = null
 
     constructor(deps: SyncServiceDeps) {
         this.store = deps.store
@@ -301,9 +307,12 @@ export class SyncService implements SyncCoordinator {
         talker: string,
         msg: WeflowMessage,
         now: number,
-        ingestPath: 'sse' | 'catchup',
+        ingestPath: 'sse' | 'catchup' | 'reconcile',
     ): { status: 'enqueued' | 'duplicate' | 'skipped', normalized: NormalizedMessage } {
         const n = this.adapter.normalize({ talker, message: msg })
+        // 撤回行（原地改写、serverId 同原消息）不是新消息：不当普通消息入队。
+        // 撤回事件的产出由 reconcileRevokes 按 revocable_until 看守驱动（绕开本函数的 serverId 去重）。
+        if (isRevokeRow(msg)) return { status: 'skipped', normalized: n }
         if (!n.dedupKey) return { status: 'skipped', normalized: n }
         // 仅群聊转发闸门：未放行群（或无 conversationId）一律不入队（与会话级过滤双保险）
         if (n.conversationId === null || !this.db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, n.conversationId)) {
@@ -324,6 +333,8 @@ export class SyncService implements SyncCoordinator {
             rawJson: n.rawJson,
             mediaJson: n.media.length > 0 ? JSON.stringify(n.media) : null,
             ingestPath,
+            // 仍可能被撤回（普通 2min / 文件 3h，含 grace）则留看守截止，供对账扫描复查；过期/系统消息为 null
+            revocableUntil: computeRevocableUntil(msg, now),
         }, now)
         // 旁路副作用：系统消息（localType 10000）尝试性解析，识别出已知事件则处理（不影响上面的入队/转发）。
         // 绑在「新入队」上 → 重复拉取的同一条消息被 dedup 挡住、副作用也只触发一次。
@@ -426,6 +437,124 @@ export class SyncService implements SyncCoordinator {
             offset += page.messages.length
             if (!page.hasMore) break
         }
+    }
+
+    // ── 撤回检测（revocable_until 看守 + 周期对账扫描） ──────────────────
+    /** 启动撤回对账周期扫描（顶层装配后调用）。重复调用幂等。 */
+    startReconcileLoop(intervalSec: number = RECONCILE_INTERVAL_SEC): void {
+        if (this.reconcileTimer) return
+        this.reconcileTimer = setInterval(() => {
+            this.reconcileRevokes().catch((e: unknown) => {
+                this.log.error({ err: e instanceof Error ? e.message : String(e) }, '[sync] 撤回对账轮次异常')
+            })
+        }, intervalSec * 1000)
+        this.reconcileTimer.unref?.()
+    }
+
+    /** 停止撤回对账周期扫描 */
+    stopReconcileLoop(): void {
+        if (this.reconcileTimer) {
+            clearInterval(this.reconcileTimer)
+            this.reconcileTimer = null
+        }
+    }
+
+    /**
+     * 撤回对账扫描（可 await，便于测试）：对仍在撤回窗口内（revocable_until > now）的看守消息复查，
+     * 发现 serverId 已翻成撤回态 → 入队 message.revoke 并清看守。无看守则零 REST。
+     */
+    reconcileRevokes(): Promise<void> {
+        const now = nowSec()
+        const watches = this.db.queue.listOpenRevokeWatches(WEFLOW_CHANNEL_ID, now)
+        if (watches.length === 0) return Promise.resolve()
+
+        // 按 talker 分组（缺会话/serverId 的看守跳过）
+        const byTalker = new Map<string, RevokeWatch[]>()
+        for (const w of watches) {
+            if (!w.conversationId || !w.externalId) continue
+            const arr = byTalker.get(w.conversationId)
+            if (arr) arr.push(w)
+            else byTalker.set(w.conversationId, [w])
+        }
+
+        const client = this.createClient(this.cfg())
+        return this.reconcileAll(client, byTalker, now)
+    }
+
+    /** 逐 talker 复查；单 talker 失败仅记日志，不影响其它（与实时回查一致的错误隔离） */
+    private async reconcileAll(client: WeflowClientLike, byTalker: Map<string, RevokeWatch[]>, now: number): Promise<void> {
+        for (const [talker, group] of byTalker) {
+            try {
+                await this.reconcileTalker(client, talker, group, now)
+            } catch (e) {
+                this.log.error(
+                    { talker, err: e instanceof Error ? e.message : String(e) },
+                    `[sync] 撤回对账失败：talker=${talker}`,
+                )
+            }
+        }
+    }
+
+    /**
+     * 复查单个会话的看守消息：
+     *   - 近窗粗拉 [now-近窗, now]：覆盖普通消息（撤回窗 2min+grace 内）；
+     *   - 文件等 createTime 早于近窗、仍在 3h 窗口的看守：start≈end 定向探一行。
+     * 命中「看守中的 serverId 已是撤回态」→ 入队撤回事件。
+     */
+    private async reconcileTalker(client: WeflowClientLike, talker: string, watches: RevokeWatch[], now: number): Promise<void> {
+        const watchedIds = new Set(watches.map(w => String(w.externalId)))
+        const handled = new Set<string>()
+        const scan = (msgs: WeflowMessage[]): void => {
+            for (const m of msgs) {
+                const sid = String(m.serverId ?? m.localId ?? '').trim()
+                if (!sid || handled.has(sid) || !watchedIds.has(sid)) continue
+                if (isRevokeRow(m)) {
+                    this.emitRevoke(talker, m, now)
+                    handled.add(sid)
+                }
+            }
+        }
+
+        // 近窗粗拉（单页足矣：窗口仅 2min+grace，量小）
+        const near = await client.fetchMessagesPage(talker, now - NEAR_REVOKE_WINDOW_SEC, 0, PAGE_SIZE)
+        scan(near.messages)
+
+        // 仍未解决、且早于近窗的看守（文件 3h 窗口）→ 定向探针
+        for (const w of watches) {
+            const sid = String(w.externalId)
+            if (handled.has(sid)) continue
+            const ts = w.msgTimestamp
+            if (ts === null || ts >= now - NEAR_REVOKE_WINDOW_SEC) continue
+            const probe = await client.fetchMessagesPage(talker, ts - 1, 0, PAGE_SIZE, ts + 1)
+            scan(probe.messages)
+        }
+    }
+
+    /**
+     * 入队一条撤回事件。独立去重键 `revoke:<serverId>` 绕开原消息的 serverId 键，确保只入队一次；
+     * 无论入队与否都清掉该 serverId 的看守，停止后续重复探测。
+     */
+    private emitRevoke(talker: string, msg: WeflowMessage, now: number): void {
+        const serverId = String(msg.serverId ?? msg.localId ?? '').trim()
+        if (!serverId) return
+        if (this.db.dedup.markIfNew(WEFLOW_CHANNEL_ID, `revoke:${serverId}`, now)) {
+            this.db.queue.enqueue({
+                channelId: WEFLOW_CHANNEL_ID,
+                platform: WEFLOW_PLATFORM,
+                eventType: 'message.revoke',
+                externalId: serverId,
+                conversationId: talker,
+                senderId: null,
+                msgTimestamp: typeof msg.createTime === 'number' ? msg.createTime : now,
+                hasMedia: 0,
+                rawJson: JSON.stringify(msg),
+                mediaJson: null,
+                ingestPath: 'reconcile',
+                revocableUntil: null,
+            }, now)
+            this.log.info({ talker, serverId }, '[sync] 检测到消息撤回，已入队 message.revoke')
+        }
+        this.db.queue.clearRevokeWatch(WEFLOW_CHANNEL_ID, serverId)
     }
 
     /** 入库水位推进：仅在更大时更新（独立于转发侧 breakpoint） */

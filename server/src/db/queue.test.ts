@@ -16,6 +16,7 @@ function sample(over: Partial<EnqueueInput> = {}): EnqueueInput {
         rawJson: '{"a":1}',
         mediaJson: null,
         ingestPath: 'catchup',
+        revocableUntil: null,
         ...over,
     }
 }
@@ -138,5 +139,45 @@ describe('QueueStore.list / getById', () => {
         store.enqueue(sample(), 1)
         expect(store.getById(CH, 999)).toBeNull()
         expect(store.getById('weflow:other', 1)).toBeNull()
+    })
+})
+
+describe('QueueStore — 撤回看守 revocable_until', () => {
+    const CH = 'weflow:default'
+    let db: BetterSqlite3.Database
+    let store: QueueStore
+    beforeEach(() => { db = new BetterSqlite3(':memory:'); migrate(db); store = new QueueStore(db) })
+    afterEach(() => db.close())
+
+    it('enqueue 写入 revocable_until（非空与 null 都正确落库）', () => {
+        store.enqueue(sample({ externalId: 'srv-1', revocableUntil: 1700000150 }), 1700000000)
+        store.enqueue(sample({ externalId: 'srv-2', revocableUntil: null }), 1700000000)
+        const rows = db.prepare('SELECT external_id, revocable_until FROM queue ORDER BY id').all() as Array<{ external_id: string, revocable_until: number | null }>
+        expect(rows).toEqual([
+            { external_id: 'srv-1', revocable_until: 1700000150 },
+            { external_id: 'srv-2', revocable_until: null },
+        ])
+    })
+
+    it('listOpenRevokeWatches 只返回 revocable_until > now 的看守行（过期/NULL 不返回）', () => {
+        store.enqueue(sample({ externalId: 'open', conversationId: 'g@chatroom', msgTimestamp: 100, revocableUntil: 1000 }), 1)
+        store.enqueue(sample({ externalId: 'expired', msgTimestamp: 50, revocableUntil: 500 }), 1)
+        store.enqueue(sample({ externalId: 'none', msgTimestamp: 60, revocableUntil: null }), 1)
+
+        const open = store.listOpenRevokeWatches(CH, 600)
+
+        expect(open).toEqual([{ conversationId: 'g@chatroom', externalId: 'open', msgTimestamp: 100 }])
+    })
+
+    it('listOpenRevokeWatches 隔离 channel', () => {
+        store.enqueue(sample({ externalId: 'a', revocableUntil: 1000 }), 1)
+        store.enqueue(sample({ channelId: 'weflow:other', externalId: 'b', revocableUntil: 1000 }), 1)
+        expect(store.listOpenRevokeWatches(CH, 1).map(w => w.externalId)).toEqual(['a'])
+    })
+
+    it('clearRevokeWatch 把指定 serverId 的看守置 NULL（撤回检出后停止再探）', () => {
+        store.enqueue(sample({ externalId: 'srv-1', revocableUntil: 1000 }), 1)
+        store.clearRevokeWatch(CH, 'srv-1')
+        expect(store.listOpenRevokeWatches(CH, 1)).toEqual([])
     })
 })

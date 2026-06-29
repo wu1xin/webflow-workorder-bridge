@@ -45,23 +45,23 @@ sub = Math.floor(localType / 2**32)  // appmsg 子类型（非 appmsg 为 0）
 
 ## 4. 核心检测 + 绕开去重陷阱
 
-**撤回行识别**（与采集路径无关，落在共享 ingest 核里）：
+> 实现收敛说明：把「撤回发射」收敛到对账扫描这一处（见 §5），`ingestOne` 只负责**跳过撤回行**。
+> 这样撤回事件天然只对「我们看守过（即活着时入过库）的消息」产出，零历史孤儿撤回，也不必给 dedup 加 `has` 查询。
+
+**撤回行识别**（纯函数 `isRevokeRow`，落在 [revoke.ts](../../server/src/sync/revoke.ts)）：
 
 ```
-isRevoke = (localType === 10000) && /<sysmsg[^>]*type="revokemsg"/.test(rawContent ?? content)
+isRevoke = (localType === 10000) && /<sysmsg[^>]*type=["']revokemsg/.test(rawContent ?? content)
 ```
 
 命中即知：该行 `serverId` 对应的消息被撤回（原地改写，`serverId` 即被撤消息 id）。
 
-**绕开去重**：现有 ingestOne 是「`serverId` 命中 dedup → skip」，撤回行会在跑到系统消息分发前就被 skip。改造为**先认撤回行**：
+**绕开去重陷阱**：现有 ingestOne 是「`serverId` 命中 dedup → skip」。撤回行 `serverId` 与原消息相同，若放任会有两种坏结果：要么被当重复 skip（撤回信息丢失），要么在从未见过该 serverId 时（全量拉到历史撤回）被**当普通 message.new 入队**。改造为：
 
-- 是撤回行 → 用**独立去重键** `revoke:<serverId>` 走 `markIfNew`：
-  - 首次 → 入队 `message.revoke` 事件；并把该 `serverId` 原队列行的 `revocable_until` 置 `null`（停止再探）。
-  - 重复 → 跳过（多轮扫描天然幂等）。
-  - 该键与原消息的 `<serverId>` 去重键**互不干扰**，所以「原消息已去重」不影响「撤回事件入队」。
-- 非撤回行 → 维持现有 normalize → dedup(`serverId`) → enqueue 逻辑，并补一步「算 `revocable_until`」（见 §5.1）。
+- **`ingestOne` 先认撤回行 → 直接 skip**（撤回 sysmsg 不是新消息，不入队、不计数）。撤回事件的产出不在这里，交给对账扫描。
+- 非撤回行 → 维持现有 normalize → dedup(`serverId`) → enqueue，并补一步「算 `revocable_until`」（见 §5.1）。
 
-`parseSystemEvent`（[systemMessage.ts](../../server/src/sync/systemMessage.ts)）加一支 `{ kind: 'message_revoked' }`；`serverId` 由调用处从该行取（撤回文案里不含被撤 id）。
+**撤回事件的唯一发射点 = 对账扫描的 `emitRevoke`**：对一条**看守中**的 serverId 探到其已翻撤回态时，用**独立去重键** `revoke:<serverId>` 走 `markIfNew`——首次才入队 `message.revoke`（externalId=serverId、conversationId=talker、ingest_path=`reconcile`、rawJson=该撤回行原文），随后无论入队与否都 `clearRevokeWatch` 清看守停止再探。该键与原消息的 `<serverId>` 键互不干扰，多轮扫描天然幂等。
 
 ## 5. 覆盖机制：`revocable_until` + 周期对账扫描
 
@@ -83,13 +83,15 @@ isFile = (low === 49 && sub === 6) && /<appattach>[\s\S]*?<fileext>/.test(rawCon
 
 链接 appmsg（`<type>5</type>`）等一律归 2min 桶。判不准时落 2min——宁可漏极少数迟到文件撤回，也不把每条都盯 3h。系统消息、撤回事件本身存 `null`，不参与扫描。
 
-### 5.2 扫描（周期 ~60s 一轮 `reconcileRevokes()`）
+### 5.2 扫描（周期 ~30s 一轮 `reconcileRevokes()`）
 
-1. `SELECT DISTINCT conversation_id, ... WHERE channel_id=? AND revocable_until > now` → 只取「还有消息在撤回窗口内」的群；空闲群零成本。
-2. 对每个这样的群复查，跑 §4 核心检测。复查用**两种查询形态**（两窗口量级差太大）：
+1. `listOpenRevokeWatches`：`WHERE channel_id=? AND revocable_until > now` → 只取「还有消息在撤回窗口内」的看守行，按 talker 分组；无看守则**零 REST** 直接返回。空闲群零成本。
+2. 对每个 talker 复查（单 talker 失败仅记日志、不影响其它）。复查用**两种查询形态**（两窗口量级差太大），只对「看守中的 serverId」判撤回态：
    - **近窗粗拉**：`fetchMessagesPage(talker, start = now-(2min+grace))` 拉最近一小段——把所有普通消息的撤回一网打尽，页很小。
-   - **文件定向探针**：对仍在 3h 窗口、且已超出近窗的文件消息，逐条 `fetchMessagesPage(talker, start≈end≈该消息 createTime)` 精确探一行，看 `serverId` 是否翻成撤回态。文件少 → 探针少，避免「为一条文件每 60s 重拉 3h」。
-3. 命中撤回 → §4 入队 `message.revoke` + 置 `revocable_until=null`。窗口过期未撤的，靠 `> now` 自然滑出，无需主动清理。
+   - **文件定向探针**：对仍在 3h 窗口、且 createTime 已早于近窗的看守，逐条 `fetchMessagesPage(talker, start≈end≈该消息 createTime)` 精确探一行（`end` 参数），看 `serverId` 是否翻成撤回态。文件少 → 探针少，避免「为一条文件每轮重拉 3h」。
+3. 命中撤回 → `emitRevoke`（§4）入队 `message.revoke` + 清看守。窗口过期未撤的，靠 `> now` 自然滑出，无需主动清理。
+
+扫描间隔 `RECONCILE_INTERVAL_SEC=30s`，远小于普通消息 2min 窗口，过点后还能扫到几轮兜底；检测延迟上界 ≈ 间隔。`startReconcileLoop/stopReconcileLoop` 由顶层 [index.ts](../../server/src/index.ts) 装配（`listen` 后启动）。
 
 ### 5.3 重启自愈
 
@@ -97,7 +99,7 @@ isFile = (low === 49 && sub === 6) && /<appattach>[\s\S]*?<fileext>/.test(rawCon
 
 ### 5.4 与补偿/全量同步的关系
 
-§4 核心检测在共享 ingest 路径里 → 全量/补偿拉到撤回行也会顺带识别并入队，重连/重启那次补偿天然兜一层。但**主保障是周期扫描**，不依赖「群里恰好又有人说话」或「恰好断线重连」。
+全量/补偿拉到的撤回行被 `ingestOne` 统一 skip（不入队、不产撤回事件），因此**不会**为历史撤回产生孤儿事件。撤回检测完全由 `revocable_until` 看守 + 周期扫描兜底——看守持久化在库，重启/重连后照样接着扫，无需依赖「群里恰好又有人说话」或「恰好断线重连」。
 
 ## 6. 改动清单
 
@@ -107,11 +109,10 @@ isFile = (low === 49 && sub === 6) && /<appattach>[\s\S]*?<fileext>/.test(rawCon
 | [db/queue.ts](../../server/src/db/queue.ts) | `EnqueueInput` 增 `revocableUntil: number \| null`；insert 写入；新增 `listOpenRevokeWatches(channelId, now)`（返回待盯消息的 talker/serverId/msgTimestamp/是否文件）与 `clearRevokeWatch(channelId, serverId)` |
 | [db/dedup.ts](../../server/src/db/dedup.ts) | **不改**：撤回事件复用 `markIfNew`，键 `revoke:<serverId>` |
 | [weflow/restClient.ts](../../server/src/weflow/restClient.ts) | `fetchMessagesPage` 加可选 `end` 参数（文件定向探针用）；`WeflowMessage.localType` 已是 `number`，容纳打包大整数无需改 |
-| [sync/systemMessage.ts](../../server/src/sync/systemMessage.ts) | `SystemEvent` 增 `{ kind: 'message_revoked' }`；`parseSystemEvent` 加 revokemsg 分支；新增纯函数 `isRevokeRow(msg)`、`isFileMessage(msg)`、`computeRevocableUntil(msg, now)` 便于单测 |
-| [sync/syncService.ts](../../server/src/sync/syncService.ts) | ingestOne 改造（先认撤回行入队 `message.revoke`；非撤回行算 `revocableUntil` 落库）；新增 `reconcileRevokes()` 周期扫描 + 启动/停止时机；撤回事件归一化（externalId=serverId，eventType=`message.revoke`） |
-| [@wb/shared 类型] | `WeflowIngestPath` 增 `'reconcile'`；`EnqueueInput.ingestPath` 放宽到含 `'reconcile'` |
-
-扫描定时器的启停建议挂在连接生命周期上（连上启、teardown 停），与现有 `realtimeLoops` 同层；或由顶层 server 装配一个独立 interval。具体位置实现时定。
+| [sync/revoke.ts](../../server/src/sync/revoke.ts) | **新模块**（纯函数，便于单测）：`isRevokeRow`、`isFileMessage`、`computeRevocableUntil`、`NEAR_REVOKE_WINDOW_SEC`。撤回识别独立于 `systemMessage.ts`（后者仍专注群改名等系统事件解析） |
+| [sync/syncService.ts](../../server/src/sync/syncService.ts) | `ingestOne` 改造（先 skip 撤回行；非撤回行算 `revocableUntil` 落库）；新增 `reconcileRevokes()`/`reconcileTalker`/`emitRevoke` 对账扫描 + `startReconcileLoop`/`stopReconcileLoop`；`WeflowClientLike.fetchMessagesPage` 加 `end?` 参数 |
+| [index.ts](../../server/src/index.ts) | `listen` 后 `sync.startReconcileLoop()` 启动周期扫描 |
+| [@wb/shared 类型](../../shared/src/types/weflow-message.ts) | `WeflowIngestPath` 增 `'reconcile'`；`EnqueueInput.ingestPath` 随之放宽 |
 
 ## 7. 边界与权衡
 
@@ -121,12 +122,13 @@ isFile = (low === 49 && sub === 6) && /<appattach>[\s\S]*?<fileext>/.test(rawCon
 - **撤回行也是放行群才入队**：检测发生在已放行群的回查/扫描里；非放行群连 REST 都不发，不会产出撤回事件。
 - **媒体撤回**：图片/视频等富媒体撤回与普通消息同走 2min 桶，检测逻辑一致（只认 `serverId` 翻 10000），不涉及媒体本身。
 
-## 8. 测试点
+## 8. 测试点（已落地，全绿）
 
-复用 [syncService.test.ts](../../server/src/sync/syncService.test.ts) 的注入式桩（`createClient` 注 REST 桩 + 内存 db）：
+[revoke.test.ts](../../server/src/sync/revoke.test.ts) 纯函数 + [syncService.test.ts](../../server/src/sync/syncService.test.ts) 注入式桩（`createClient` 注 REST 桩 + 内存 db）+ [schema.test.ts](../../server/src/db/schema.test.ts)/[queue.test.ts](../../server/src/db/queue.test.ts)/[restClient.test.ts](../../server/src/weflow/restClient.test.ts)：
 
-1. **纯函数**：`isRevokeRow`（10000+revokemsg → true；普通/文件大整数 → false）；`isFileMessage`（PDF 打包 localType+`<fileext>` → true；图片 3/表情 47/文字 1 → false）；`computeRevocableUntil`（文件 +3h、普通 +2min、已过期 → null）。
-2. **去重陷阱**：原消息已入队（dedup 命中 `serverId`）后，喂同 `serverId` 的撤回行 → 仍入队一条 `message.revoke`（键 `revoke:<serverId>`），不被原去重挡住；再喂一次 → 不重复入队。
-3. **`reconcileRevokes` 行为**：放行群里一条普通消息撤回 → 近窗粗拉发现 → 入队撤回事件 + `revocable_until` 清空；窗口外的消息不再被扫；非放行群零 REST。
-4. **文件定向探针**：文件消息超出近窗仍在 3h 内 → 用 `start≈end` 精确探到撤回。
-5. **重启自愈**：库里有 `revocable_until > now` 的行，新建 SyncService 跑一轮扫描即能发现其撤回。
+1. **纯函数**：`isRevokeRow`（10000+revokemsg → true；普通/文件大整数 → false；群改名 → false）；`isFileMessage`（PDF 打包 localType+`<fileext>` → true；图片 3/表情 47/文字 1/链接 type5 → false）；`computeRevocableUntil`（文件 +3h、普通 +2min、已过期/系统消息/缺 createTime → null）。
+2. **schema/queue**：v3→v4 升级补 `revocable_until` 且保留数据；`enqueue` 落库；`listOpenRevokeWatches` 只返回 `> now` 且 channel 隔离；`clearRevokeWatch` 置 null。
+3. **`reconcileRevokes` 行为**：看守中消息变撤回态 → 入队 `message.revoke(reconcile)` + 清看守；重复对账只入队一次；未撤回则不产出、看守保留；无看守零 REST。
+4. **文件定向探针**：文件消息超出近窗仍在 3h 内 → 带 `end` 的探针精确探到撤回。
+5. **ingestOne 跳过撤回行**：回查到从未见过 serverId 的撤回 sysmsg → 不被当普通消息入队（零孤儿）。
+6. **restClient**：`fetchMessagesPage` 传 `end` 时 URL 带 `end`，不传则不带。

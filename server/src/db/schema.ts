@@ -1,10 +1,11 @@
 // SQLite 表结构（DDL）+ 迁移。多上游 v2：引入 channel_id/platform 维度。
 // v3 新增 chat_group（群聊登记 + 下游推送裁决）。
+// v4 给 queue 加 revocable_until（撤回对账看守的截止时间，见 2026-06-29-weflow-撤回检测-design.md）。
 // 设计依据见 docs/plans/2026-06-23-multi-upstream-schema-design.md。
 import type BetterSqlite3 from 'better-sqlite3'
 
 /** 库结构版本：结构有破坏性变更时 +1，并在 migrate 中补迁移分支 */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 const DDL = `
 -- 1. meta —— 全局单例状态（仅放真正全局的键，如 schemaVersion）
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS queue (
   has_media       INTEGER NOT NULL DEFAULT 0,               -- 是否含媒体：1 是 | 0 否
   raw_json        TEXT    NOT NULL,                         -- 上游原始整包 JSON（保真，便于回溯/换格式重转）
   media_json      TEXT,                                     -- 归一化附件列表（JSON 数组；无附件为 NULL）
-  ingest_path     TEXT    NOT NULL,                         -- 采集路径：sse 实时 | catchup 补偿
+  ingest_path     TEXT    NOT NULL,                         -- 采集路径：sse 实时 | catchup 补偿 | reconcile 撤回对账
+  revocable_until INTEGER,                                  -- 撤回看守截止（秒）：仍可能被撤回则非空，过期/不看守为 NULL
   status          TEXT    NOT NULL DEFAULT 'pending',       -- pending|sending|done|dead
   attempts        INTEGER NOT NULL DEFAULT 0,               -- 已重试次数
   next_attempt_at INTEGER,                                  -- 下次重试时间（秒级时间戳）
@@ -57,6 +59,8 @@ CREATE TABLE IF NOT EXISTS queue (
 );
 CREATE INDEX IF NOT EXISTS idx_queue_pick    ON queue(status, next_attempt_at, id);
 CREATE INDEX IF NOT EXISTS idx_queue_channel ON queue(channel_id, msg_timestamp);
+-- 撤回对账扫描只看 revocable_until 非空的少量行，部分索引让 WHERE revocable_until > ? 走索引
+CREATE INDEX IF NOT EXISTS idx_queue_revoke  ON queue(channel_id, revocable_until) WHERE revocable_until IS NOT NULL;
 
 -- 5. dlq —— 死信（视图，不单独建表）
 CREATE VIEW IF NOT EXISTS dlq AS
@@ -144,6 +148,12 @@ export function migrate(db: BetterSqlite3.Database): void {
             db.exec(DROP_LEGACY)
             // 旧全局水位键迁往 channel_state，清理之
             db.exec('DELETE FROM meta WHERE key IN (\'installTime\',\'lastSyncTimestamp\',\'lastSyncRawid\')')
+        }
+
+        // v2/v3 → v4：queue 已存在但缺 revocable_until，先补列再 exec DDL（DDL 里的部分索引会引用它）。
+        // v0/v1 走上面 DROP+重建分支，由 DDL 直接带出该列，无需 ALTER。
+        if (current >= 2 && current < 4) {
+            db.exec('ALTER TABLE queue ADD COLUMN revocable_until INTEGER')
         }
 
         db.exec(DDL)
