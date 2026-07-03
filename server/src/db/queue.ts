@@ -40,6 +40,7 @@ export interface ClaimedMessage {
     rawJson: string
     msgTimestamp: number | null
     externalId: string | null
+    conversationId: string | null
 }
 
 /** 撤回对账扫描的一条看守行（revocable_until 仍 > now） */
@@ -149,7 +150,7 @@ export class QueueStore {
             'UPDATE queue SET revocable_until = NULL WHERE channel_id = ? AND external_id = ?',
         )
         this.pickStmt = db.prepare(`
-            SELECT id, event_type, raw_json, msg_timestamp, external_id FROM queue
+            SELECT id, event_type, raw_json, msg_timestamp, external_id, conversation_id FROM queue
             WHERE channel_id = @channelId AND status = 'pending' AND has_media = 0
               AND (next_attempt_at IS NULL OR next_attempt_at <= @now)
             ORDER BY id LIMIT 1
@@ -241,11 +242,11 @@ export class QueueStore {
     claimNext(channelId: string, now: number): ClaimedMessage | null {
         return this.db.transaction(() => {
             const row = this.pickStmt.get({ channelId, now }) as {
-                id: number, event_type: string, raw_json: string, msg_timestamp: number | null, external_id: string | null
+                id: number, event_type: string, raw_json: string, msg_timestamp: number | null, external_id: string | null, conversation_id: string | null
             } | undefined
             if (!row) return null
             this.toSendingStmt.run({ id: row.id, now })
-            return { id: row.id, eventType: row.event_type, rawJson: row.raw_json, msgTimestamp: row.msg_timestamp, externalId: row.external_id }
+            return { id: row.id, eventType: row.event_type, rawJson: row.raw_json, msgTimestamp: row.msg_timestamp, externalId: row.external_id, conversationId: row.conversation_id }
         })()
     }
 
