@@ -103,7 +103,7 @@ describe('schema v5', () => {
         // 模拟「版本已跳到 5、列却没补」的坏库：dev 期 tsx watch 在中间态重载留下的状态
         db.exec('DROP INDEX idx_queue_revoke')
         db.exec('ALTER TABLE queue DROP COLUMN revocable_until')
-        // 版本保持 4（不回退）
+        // 版本保持 5（不回退）
 
         expect(() => migrate(db)).not.toThrow()
         expect(columns(db, 'queue')).toContain('revocable_until')
