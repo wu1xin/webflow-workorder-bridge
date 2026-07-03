@@ -9,15 +9,39 @@ function exists(db: BetterSqlite3.Database, name: string): boolean {
     return db.prepare('SELECT 1 FROM sqlite_master WHERE name = ?').get(name) !== undefined
 }
 
-describe('schema v4', () => {
+describe('schema v5', () => {
     let db: BetterSqlite3.Database
     beforeEach(() => { db = new BetterSqlite3(':memory:'); migrate(db) })
     afterEach(() => db.close())
 
-    it('SCHEMA_VERSION 为 4 且写入 meta', () => {
-        expect(SCHEMA_VERSION).toBe(4)
+    it('SCHEMA_VERSION 为 5 且写入 meta', () => {
+        expect(SCHEMA_VERSION).toBe(5)
         const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(row.value).toBe('4')
+        expect(row.value).toBe('5')
+    })
+
+    it('channel_state 含投递断点列', () => {
+        const cols = columns(db, 'channel_state')
+        expect(cols).toEqual(expect.arrayContaining(['breakpoint_timestamp', 'breakpoint_rawid']))
+    })
+
+    it('v4→v5 增量升级：补建断点列且保留既有 channel_state 数据', () => {
+        db.exec('DROP TABLE channel_state')
+        db.exec(`CREATE TABLE channel_state (
+          channel_id TEXT PRIMARY KEY, platform TEXT NOT NULL, install_time INTEGER,
+          last_sync_timestamp INTEGER, last_sync_rawid TEXT, updated_at INTEGER NOT NULL
+        )`)
+        db.prepare(`INSERT INTO channel_state(channel_id, platform, last_sync_timestamp, updated_at)
+                    VALUES ('weflow:default','weflow',123,1)`).run()
+        db.prepare('UPDATE meta SET value = ? WHERE key = ?').run('4', 'schemaVersion')
+
+        migrate(db)
+
+        expect(columns(db, 'channel_state')).toEqual(expect.arrayContaining(['breakpoint_timestamp', 'breakpoint_rawid']))
+        const row = db.prepare('SELECT last_sync_timestamp t FROM channel_state WHERE channel_id = ?').get('weflow:default') as { t: number }
+        expect(row.t).toBe(123)
+        const ver = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
+        expect(ver.value).toBe('5')
     })
 
     it('queue 含归一化信封列 + revocable_until，且不再有旧 source 列', () => {
@@ -32,8 +56,8 @@ describe('schema v4', () => {
         expect(cols).not.toContain('file_json')
     })
 
-    it('v3→v4 增量升级：queue 补 revocable_until 且保留既有数据', () => {
-        // 用迁移好的 v4 库模拟「老 v3 库」：先删依赖列的部分索引、再删列 + 回退版本号 + 塞一条 queue
+    it('v3→v5 增量升级：queue 补 revocable_until 且保留既有数据', () => {
+        // 用迁移好的 v5 库模拟「老 v3 库」：先删依赖列的部分索引、再删列 + 回退版本号 + 塞一条 queue
         db.exec('DROP INDEX idx_queue_revoke')
         db.exec('ALTER TABLE queue DROP COLUMN revocable_until')
         db.prepare('UPDATE meta SET value = ? WHERE key = ?').run('3', 'schemaVersion')
@@ -45,7 +69,7 @@ describe('schema v4', () => {
         expect(columns(db, 'queue')).toContain('revocable_until')
         expect(db.prepare('SELECT COUNT(*) c FROM queue').get()).toEqual({ c: 1 })
         const ver = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(ver.value).toBe('4')
+        expect(ver.value).toBe('5')
     })
 
     it('dedup 主键为 channel_id + dedup_key', () => {
@@ -75,8 +99,8 @@ describe('schema v4', () => {
         ]))
     })
 
-    it('库已是 v4 但 queue 缺 revocable_until（历史半迁移）→ migrate 幂等补列、不报错', () => {
-        // 模拟「版本已跳到 4、列却没补」的坏库：dev 期 tsx watch 在中间态重载留下的状态
+    it('库已是 v5 但 queue 缺 revocable_until（历史半迁移）→ migrate 幂等补列、不报错', () => {
+        // 模拟「版本已跳到 5、列却没补」的坏库：dev 期 tsx watch 在中间态重载留下的状态
         db.exec('DROP INDEX idx_queue_revoke')
         db.exec('ALTER TABLE queue DROP COLUMN revocable_until')
         // 版本保持 4（不回退）
@@ -85,8 +109,8 @@ describe('schema v4', () => {
         expect(columns(db, 'queue')).toContain('revocable_until')
     })
 
-    it('v2→v4 增量升级：补建 chat_group + revocable_until 且保留既有数据', () => {
-        // 用迁移好的 v4 库模拟「老 v2 库」：删掉 v3(chat_group)/v4(索引+列) 新增 + 回退版本号 + 塞一条 queue
+    it('v2→v5 增量升级：补建 chat_group + revocable_until 且保留既有数据', () => {
+        // 用迁移好的 v5 库模拟「老 v2 库」：删掉 v3(chat_group)/v4(索引+列) 新增 + 回退版本号 + 塞一条 queue
         db.exec('DROP TABLE chat_group')
         db.exec('DROP INDEX idx_queue_revoke')
         db.exec('ALTER TABLE queue DROP COLUMN revocable_until')
@@ -100,10 +124,10 @@ describe('schema v4', () => {
         expect(columns(db, 'queue')).toContain('revocable_until')
         expect(db.prepare('SELECT COUNT(*) c FROM queue').get()).toEqual({ c: 1 })
         const ver = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(ver.value).toBe('4')
+        expect(ver.value).toBe('5')
     })
 
-    it('v1→v4 升级路径：DROP 旧表并清理旧水位键', () => {
+    it('v1→v5 升级路径：DROP 旧表并清理旧水位键', () => {
         const v1 = new BetterSqlite3(':memory:')
         v1.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)')
         v1.exec('CREATE TABLE queue (id INTEGER PRIMARY KEY, source TEXT, data_json TEXT)')
@@ -122,7 +146,7 @@ describe('schema v4', () => {
         expect(keys).not.toContain('lastSyncTimestamp')
         expect(keys).not.toContain('lastSyncRawid')
         const ver = v1.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(ver.value).toBe('4')
+        expect(ver.value).toBe('5')
         v1.close()
     })
 })

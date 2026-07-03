@@ -1,11 +1,12 @@
 // SQLite 表结构（DDL）+ 迁移。多上游 v2：引入 channel_id/platform 维度。
 // v3 新增 chat_group（群聊登记 + 下游推送裁决）。
 // v4 给 queue 加 revocable_until（撤回对账看守的截止时间，见 2026-06-29-weflow-撤回检测-design.md）。
+// v5 给 channel_state 加投递断点列 breakpoint_timestamp/breakpoint_rawid（下游转发进度水位，独立于 last_sync_timestamp 入队水位）。
 // 设计依据见 docs/plans/2026-06-23-multi-upstream-schema-design.md。
 import type BetterSqlite3 from 'better-sqlite3'
 
 /** 库结构版本：结构有破坏性变更时 +1，并在 migrate 中补迁移分支 */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 const DDL = `
 -- 1. meta —— 全局单例状态（仅放真正全局的键，如 schemaVersion）
@@ -21,6 +22,8 @@ CREATE TABLE IF NOT EXISTS channel_state (
   install_time        INTEGER,              -- 首次初始化时刻（秒）：首装/重启分流判定
   last_sync_timestamp INTEGER,              -- 同步水位：已入队的最大消息时间戳（秒）
   last_sync_rawid     TEXT,                 -- 水位对应的上游消息 ID（同秒多条时精确定位）
+  breakpoint_timestamp INTEGER,             -- 投递断点：最后成功转发（code==1）消息的秒级时间戳
+  breakpoint_rawid     TEXT,                -- 投递断点对应 rawid（同秒多条精确定位）
   updated_at          INTEGER NOT NULL      -- 状态更新时间（秒级时间戳）
 );
 
@@ -158,6 +161,14 @@ export function migrate(db: BetterSqlite3.Database): void {
             const hasRevocable = (db.pragma('table_info(queue)') as Array<{ name: string }>)
                 .some(c => c.name === 'revocable_until')
             if (!hasRevocable) db.exec('ALTER TABLE queue ADD COLUMN revocable_until INTEGER')
+        }
+
+        // channel_state 断点列（v5）：老库有表无列 → 补列；全新库此时无表，跳过由 DDL 带出。
+        const csExists = db.prepare('SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?').get('table', 'channel_state')
+        if (csExists) {
+            const csCols = (db.pragma('table_info(channel_state)') as Array<{ name: string }>).map(c => c.name)
+            if (!csCols.includes('breakpoint_timestamp')) db.exec('ALTER TABLE channel_state ADD COLUMN breakpoint_timestamp INTEGER')
+            if (!csCols.includes('breakpoint_rawid')) db.exec('ALTER TABLE channel_state ADD COLUMN breakpoint_rawid TEXT')
         }
 
         db.exec(DDL)
