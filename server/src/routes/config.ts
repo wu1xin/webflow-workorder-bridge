@@ -1,7 +1,7 @@
 // 配置接口：GET /api/config（读全量，掩码）。保存按模块拆分，各模块独立接口：
 // WeFlow → PUT /api/config/weflow（校验 + 保存 + 触发热重连）。
 import type { FastifyInstance } from 'fastify'
-import type { AppConfig, WeflowConfig, WeflowConfigUpdate } from '@wb/shared/types'
+import type { AppConfig, WeflowConfig, WeflowConfigUpdate, DownstreamConfigUpdate } from '@wb/shared/types'
 import { ConfigValidationError } from '../config/store.js'
 import type { AppContext } from './context.js'
 
@@ -35,5 +35,20 @@ export function registerConfigRoutes(app: FastifyInstance, ctx: AppContext){
         // 配置已落盘，触发热重连（异步，不阻塞响应）
         ctx.manager.applyConfig()
         return saved.weflow
+    })
+
+    // 保存下游配置：校验 → 落盘 → kick 转发器（新配置下轮 drain 生效），返回保存后的下游配置。
+    app.put<{ Body: DownstreamConfigUpdate }>('/api/config/downstream', async (req, reply) => {
+        const body = req.body
+        if (!body || typeof body !== 'object') return reply.code(400).send({ error: '请求体格式错误：缺少下游配置' })
+        try {
+            const saved = ctx.store.saveDownstream(body)
+            ctx.forwarder.kick() // 新配置下轮 drain 生效
+            return saved.downstream
+        } catch (e) {
+            if (e instanceof ConfigValidationError) return reply.code(400).send({ error: e.message, fields: e.fields })
+            req.log.error({ err: e }, '[config] 下游配置保存失败')
+            return reply.code(500).send({ error: '下游配置保存失败' })
+        }
     })
 }

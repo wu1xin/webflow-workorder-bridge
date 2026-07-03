@@ -9,4 +9,10 @@ export function registerControlRoutes(app: FastifyInstance, ctx: AppContext): vo
         ctx.manager.manualReconnect()
         return { status: ctx.manager.getStatus() }
     })
+
+    // 转发总开关：置 enabled 后立即返回生效后的转发状态
+    app.post<{ Body: { enabled: boolean } }>('/api/control/forwarding', async (req) => {
+        ctx.forwarder.setEnabled(req.body?.enabled === true)
+        return { forwarding: ctx.forwarder.isEnabled() }
+    })
 }

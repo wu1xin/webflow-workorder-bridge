@@ -96,6 +96,19 @@ describe('SyncService 全量同步（仅群聊 + 仅放行群）', () => {
         expect(all.every(g => !g.pushAllowed)).toBe(true)
         expect(db.queue.countByStatus('pending')).toBe(0)
     })
+
+    it('新入队时触发 onEnqueued 回调（供 forwarder kick）', async () => {
+        allowGroup(db, 'proj@chatroom')
+        let kicks = 0
+        const client = stubClient(
+            [{ username: 'proj@chatroom', type: 2 }],
+            { 'proj@chatroom': { messages: [{ serverId: 's1', createTime: 100, content: 'a' }], hasMore: false } },
+        )
+        const d = deps(db, client)
+        const svc = new SyncService({ ...d, onEnqueued: () => { kicks++ } })
+        await svc.runFullSync()
+        expect(kicks).toBeGreaterThanOrEqual(1)
+    })
 })
 
 describe('SyncService.syncGroupsNow（手动立即同步群）', () => {

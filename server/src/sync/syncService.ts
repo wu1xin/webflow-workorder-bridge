@@ -74,6 +74,8 @@ export interface SyncServiceDeps {
     createClient?: (cfg: WeflowConfig) => WeflowClientLike
     /** 群同步服务；缺省则不做群同步（所有群默认不放行，不入队） */
     groupSync?: GroupSyncService
+    /** 新入队回调（供 forwarder kick 唤醒消费）；缺省则 no-op */
+    onEnqueued?: () => void
 }
 
 export class SyncService implements SyncCoordinator {
@@ -84,6 +86,7 @@ export class SyncService implements SyncCoordinator {
     private readonly adapter = new WeflowAdapter()
     private readonly createClient: (cfg: WeflowConfig) => WeflowClientLike
     private readonly groupSync?: GroupSyncService
+    private readonly onEnqueued: () => void
 
     private progress: SyncProgress = idleProgress()
     /** 手动「立即同步群」自旋锁：防连点重入（与消息同步不互斥） */
@@ -102,6 +105,7 @@ export class SyncService implements SyncCoordinator {
         this.alert = deps.alert
         this.createClient = deps.createClient ?? ((cfg) => new WeflowRestClient(cfg, this.log))
         this.groupSync = deps.groupSync
+        this.onEnqueued = deps.onEnqueued ?? (() => {})
     }
 
     /** 当前同步进度快照 */
@@ -336,6 +340,7 @@ export class SyncService implements SyncCoordinator {
             // 仍可能被撤回（普通 2min / 文件 3h，含 grace）则留看守截止，供对账扫描复查；过期/系统消息为 null
             revocableUntil: computeRevocableUntil(msg, now),
         }, now)
+        this.onEnqueued() // 唤醒 forwarder 消费本条新入队
         // 旁路副作用：系统消息（localType 10000）尝试性解析，识别出已知事件则处理（不影响上面的入队/转发）。
         // 绑在「新入队」上 → 重复拉取的同一条消息被 dedup 挡住、副作用也只触发一次。
         this.dispatchSystemEvent(talker, msg, now)
@@ -552,6 +557,7 @@ export class SyncService implements SyncCoordinator {
                 ingestPath: 'reconcile',
                 revocableUntil: null,
             }, now)
+            this.onEnqueued() // 撤回事件同样需转发，唤醒 forwarder
             this.log.info({ talker, serverId }, '[sync] 检测到消息撤回，已入队 message.revoke')
         }
         this.db.queue.clearRevokeWatch(WEFLOW_CHANNEL_ID, serverId)

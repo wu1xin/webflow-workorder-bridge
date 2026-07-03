@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import type { WeflowConfig, WeflowConfigUpdate, WeflowConnectTestResult } from '@wb/shared/types'
 import { runConnectionGate } from '../weflow/gate.js'
 import { validateWeflowUpdate } from '../config/validate.js'
+import { HttpDownstreamClient } from '../downstream/client.js'
 import type { AppContext } from './context.js'
 
 /** 把待测更新负载组装成完整配置（token 全程明文，直接取用） */
@@ -45,4 +46,11 @@ export function registerTestRoutes(app: FastifyInstance, ctx: AppContext): void 
             }
         },
     )
+
+    // 下游测连：用当前保存的下游配置发一次 ping，未配置则 400
+    app.post('/api/test/downstream-ping', async (_req, reply) => {
+        const cfg = ctx.store.getDownstream()
+        if (!cfg) return reply.code(400).send({ error: '未配置下游，无法测连' })
+        return new HttpDownstreamClient(cfg, app.log).ping()
+    })
 }

@@ -4,8 +4,11 @@
  * 已落地：WeFlow 上游连接生命周期（配置保存/加载、三级连接判定、初次连接、运行期掉线
  * 最终判断、固定间隔重连循环）与配套接口（/api/config、/api/test/weflow-connect、
  * /api/control/reconnect、/api/status）。逻辑见 docs/weflow-链路连接逻辑（仅上游）.md。
+ * 下游转发器（forwarder）已接线：消费 queue 推 receiveMessage、熔断/退避/死信、开机自启，
+ * 新入队经 sync 的 onEnqueued 回调 kick 唤醒（配套 /api/config/downstream、
+ * /api/test/downstream-ping、/api/control/forwarding、/api/dlq）。
  *
- * 尚未实现（属其它模块）：消息转发、媒体处理、补偿/全量同步落库、死信、审计等，
+ * 尚未实现（属其它模块）：媒体处理等，
  * 见 docs/plans/2026-06-17-weflow-bridge-v2-需求与架构设计.md。
  */
 import Fastify from 'fastify'
@@ -16,8 +19,10 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { ConfigStore } from './config/store.js'
 import { SyncService } from './sync/syncService.js'
+import { Forwarder } from './downstream/forwarder.js'
 import { HttpDownstreamClient } from './downstream/client.js'
 import { GroupSyncService } from './sync/groupSyncService.js'
+import { registerDlqRoutes } from './routes/dlq.js'
 import { registerTestRoutes } from './routes/test.js'
 import { registerSyncRoutes } from './routes/sync.js'
 import { registerGroupRoutes } from './routes/groups.js'
@@ -52,14 +57,16 @@ const alert = createLogAlertChannel(app.log)
 const downstreamCfg = store.getDownstream()
 const groupSync = downstreamCfg ? new GroupSyncService({ db, downstream: new HttpDownstreamClient(downstreamCfg, app.log), log: app.log, alert }) : undefined
 if (!groupSync) app.log.warn('[startup] 未配置 downstream，群同步停用，消息默认不推送')
-const sync = new SyncService({ store, db, log: app.log, alert, groupSync })
+// forwarder 先于 sync 构造：sync 的 onEnqueued 回调引用它，新入队即 kick 唤醒消费
+const forwarder = new Forwarder({ db, store, log: app.log, alert })
+const sync = new SyncService({ store, db, log: app.log, alert, groupSync, onEnqueued: () => forwarder.kick() })
 const manager = new WeflowConnectionManager({
     store,
     log: app.log,
     sync,
     alert,
 })
-const ctx: AppContext = { store, manager, sync, db }
+const ctx: AppContext = { store, manager, sync, db, forwarder }
 
 // 健康检查（本地 /healthz，对应 FR-MON-04）
 app.get('/healthz', async () => ({ status: 'ok' }))
@@ -69,6 +76,7 @@ registerConfigRoutes(app, ctx)
 registerTestRoutes(app, ctx)
 registerControlRoutes(app, ctx)
 registerStatusRoutes(app, ctx)
+registerDlqRoutes(app, ctx)
 registerStreamRoutes(app, ctx)
 registerSyncRoutes(app, ctx)
 registerGroupRoutes(app, ctx)
@@ -92,6 +100,7 @@ app.listen({
     host: HOST,
     port: PORT,
 }).then(() => {
+    forwarder.start() // 先起转发器：resetStuck 自愈 + 兜底 tick，随后消费队列
     manager.start() // 服务起来后发起 WeFlow 连接
     sync.startReconcileLoop() // 撤回对账周期扫描：无看守时零 REST，有看守才复查（见撤回检测设计）
 }).catch((err) => {
