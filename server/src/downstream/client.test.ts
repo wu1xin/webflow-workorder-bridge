@@ -95,11 +95,17 @@ describe('HttpDownstreamClient.receiveMessage', () => {
     })
 
     it('传输层错误（非200）抛异常，错误信息不含 token', async () => {
+        expect.assertions(2)
         const fetchImpl = (() => Promise.resolve({
             ok: false, status: 502, text: () => Promise.resolve('bad gateway'),
         })) as unknown as typeof fetch
-        await expect(clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: {} }))
-            .rejects.toThrow(/502/)
+        try {
+            await clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: {} })
+        }
+        catch (e) {
+            expect((e as Error).message).toMatch(/502/)
+            expect((e as Error).message).not.toContain('task_white_token')
+        }
     })
 
     it('URL 带 receiveMessage 端点与 task_white_token，body 为 {event,data} 信封', async () => {
@@ -124,5 +130,12 @@ describe('HttpDownstreamClient.ping', () => {
         })) as unknown as typeof fetch
         const res = await new HttpDownstreamClient(CFG, undefined, { fetchImpl, now: () => 1750000000 }).ping()
         expect(res).toMatchObject({ ok: true, serverTime: 1750000000, version: '1.0.0' })
+    })
+
+    it('非200 → ok=false 且带 HTTP 状态', async () => {
+        const fetchImpl = (() => Promise.resolve({ ok: false, status: 503 })) as unknown as typeof fetch
+        const res = await new HttpDownstreamClient(CFG, undefined, { fetchImpl, now: () => 1750000000 }).ping()
+        expect(res.ok).toBe(false)
+        expect(res.message).toContain('503')
     })
 })
