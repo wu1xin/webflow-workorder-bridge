@@ -34,6 +34,13 @@ export interface WeflowConfig {
  */
 export type WeflowConfigUpdate = WeflowConfig
 
+/** forwarder 重试调参（全可选，缺省用后端默认；仅暴露实际生效的三项） */
+export interface DownstreamForwarderConfig {
+    maxAttempts?: number
+    backoffBaseMs?: number
+    backoffCapMs?: number
+}
+
 /** 下游 work-order-system 接入配置（出站调用用；密钥线下交付，明文落盘） */
 export interface DownstreamConfig {
     /** 下游 base URL，如 https://example.com */
@@ -42,7 +49,12 @@ export interface DownstreamConfig {
     siteKey: string
     /** AES 密钥串（实际取前 16 字节做 AES-128-ECB） */
     aesKey: string
+    /** forwarder 重试调参（可选，缺省用后端默认） */
+    forwarder?: DownstreamForwarderConfig
 }
+
+/** 下游配置更新负载（PUT /api/config/downstream）：与 DownstreamConfig 同构 */
+export type DownstreamConfigUpdate = DownstreamConfig
 
 /** 应用整体配置（分组聚合，首版仅 weflow）。读取走 GET /api/config；保存按模块拆分（如 PUT /api/config/weflow） */
 export interface AppConfig {

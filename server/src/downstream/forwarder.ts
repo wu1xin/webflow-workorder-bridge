@@ -22,9 +22,6 @@ const DEFAULTS = {
 }
 const TICK_SEC = 10
 
-// Task 8 尚未给 DownstreamConfig 加 forwarder 子对象；此处按可选字段防御性读取，Task 8 落地真实类型后可移除。
-type ForwarderTuning = { maxAttempts?: number, backoffBaseMs?: number, backoffCapMs?: number }
-
 export interface ForwarderDeps {
     db: Db
     store: ConfigStore
@@ -126,7 +123,7 @@ export class Forwarder {
     }
 
     private policyFrom(cfg: DownstreamConfig): RetryPolicy {
-        const f = (cfg as DownstreamConfig & { forwarder?: ForwarderTuning }).forwarder ?? {}
+        const f = cfg.forwarder ?? {}
         return {
             maxAttempts: f.maxAttempts ?? DEFAULTS.maxAttempts,
             authMaxAttempts: DEFAULTS.authMaxAttempts,

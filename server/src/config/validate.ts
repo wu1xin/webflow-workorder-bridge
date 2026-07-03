@@ -1,7 +1,7 @@
 // 配置校验（PUT /api/config）：逐项校验并返回字段级错误（见 配置说明 §6）。
 // 边界取自 @wb/shared/constants 的 WEFLOW_LIMITS，保证前后端一致。
-import { WEFLOW_LIMITS } from '@wb/shared/constants'
-import type { WeflowConfigUpdate } from '@wb/shared/types'
+import { WEFLOW_LIMITS, DOWNSTREAM_LIMITS } from '@wb/shared/constants'
+import type { DownstreamConfigUpdate, WeflowConfigUpdate } from '@wb/shared/types'
 
 /** 字段级校验错误：key 为字段路径（如 reconnectIntervalSec） */
 export type FieldErrors = Record<string, string>
@@ -78,6 +78,35 @@ export function validateWeflowUpdate(
     // accessToken：必填，trim 后非空
     if (typeof update.accessToken !== 'string' || !update.accessToken.trim()) {
         errors.accessToken = '请输入 Access Token'
+    }
+
+    return { ok: Object.keys(errors).length === 0, errors }
+}
+
+/** 校验下游配置更新（密钥线下交付、明文落盘；baseUrl 建议 https） */
+export function validateDownstreamUpdate(update: DownstreamConfigUpdate): ValidationResult {
+    const errors: FieldErrors = {}
+
+    let url: URL | null = null
+    try { url = new URL(update.baseUrl) } catch { /* ignore */ }
+    if (!url || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
+        errors.baseUrl = '请输入合法的下游 Base URL（建议 https）'
+    }
+    if (typeof update.siteKey !== 'string' || !update.siteKey.trim()) {
+        errors.siteKey = '请输入站点 key'
+    }
+    if (typeof update.aesKey !== 'string' || Buffer.from(update.aesKey, 'ascii').length < 16) {
+        errors.aesKey = 'AES 密钥不足 16 字节（AES-128 取前 16 字节）'
+    }
+
+    const f = update.forwarder
+    if (f) {
+        const check = (key: keyof typeof DOWNSTREAM_LIMITS) => {
+            const v = f[key]
+            if (v === undefined) return
+            checkIntRange(errors, `forwarder.${key}`, v, DOWNSTREAM_LIMITS[key], key)
+        }
+        check('maxAttempts'); check('backoffBaseMs'); check('backoffCapMs')
     }
 
     return { ok: Object.keys(errors).length === 0, errors }

@@ -2,9 +2,9 @@
 // 见 docs/config/weflow-配置说明.md §5（数据结构）、§6（校验）。
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { AppConfig, DownstreamConfig, WeflowConfig, WeflowConfigUpdate } from '@wb/shared/types'
+import type { AppConfig, DownstreamConfig, DownstreamConfigUpdate, WeflowConfig, WeflowConfigUpdate } from '@wb/shared/types'
 import { configFilePath } from './paths.js'
-import { validateWeflowUpdate, type FieldErrors } from './validate.js'
+import { validateDownstreamUpdate, validateWeflowUpdate, type FieldErrors } from './validate.js'
 
 /** 校验失败异常：携带字段级错误，路由层转成 400 */
 export class ConfigValidationError extends Error {
@@ -96,6 +96,24 @@ export class ConfigStore {
             downstream: this.config.downstream,
         }
 
+        this.persist(next)
+        this.config = next
+        return next
+    }
+
+    /** 校验并保存下游配置（保留 weflow）。失败抛 ConfigValidationError，返回更新后配置 */
+    saveDownstream(update: DownstreamConfigUpdate): AppConfig {
+        const result = validateDownstreamUpdate(update)
+        if (!result.ok) throw new ConfigValidationError(result.errors)
+        const next: AppConfig = {
+            weflow: this.config.weflow,
+            downstream: {
+                baseUrl: update.baseUrl.trim(),
+                siteKey: update.siteKey.trim(),
+                aesKey: update.aesKey.trim(),
+                forwarder: update.forwarder,
+            },
+        }
         this.persist(next)
         this.config = next
         return next
