@@ -249,3 +249,17 @@ export interface ReceiveAck {
 9. 死信可 `GET /api/dlq` 查看、`POST /api/dlq/:id/retry` 重投。
 10. 转发总开关可运行期启/停；状态快照含积压/死信/断点/累计成败。
 11. 全量测试 + `npm run lint` + `npm run build` 通过。
+
+---
+
+## 15. 落地记录与实施偏差（2026-07-03）
+
+本期已落地并通过验收（后端 180 单测、lint、完整 build 全绿）。落地时相较本文档 §8/§9 的**有意收敛**，记录如下（本文档 §8/§9 属规划面，以此节为准）：
+
+- **配置面只暴露 3 个 forwarder 调参**：`maxAttempts`/`backoffBaseMs`/`backoffCapMs`（forwarder 每轮 drain 从 `store.getDownstream()` 实读、即时生效）。§8 曾列的 `requestTimeoutMs`/`circuitThreshold`/`circuitCooldownMs` **本期不可配**，用固定默认（请求超时 30s；熔断阈值 5、冷却 30s）——避免上「不生效的空配置」（熔断器在 forwarder 构造时一次性建好，阈值配置化需重启才生效，故本期不放）。
+- **状态快照未含 `lastForwardAt`**（§9 提及）：验收 §14.10 不要求，留待需要时补。
+- **告警去抖/冷却未实现**（§9 提及）：`LogAlertChannel` 首版逐条记日志；`downstream_circuit_open` 因 drain 在熔断态直接 return 天然每次 open 只报一次、`dlq_new` 与死信数成正比，无刷屏风险。真正的同类去抖随「真实告警渠道」一期再做。
+- **`saveDownstream` 未热重建 `GroupSyncService`**：forwarder 侧配置热生效（每轮读 store），但群同步客户端在启动时构造一次；若启动时未配下游、运行期才配，群同步需重启进程才启用（forwarder 不受影响）。属群同步既有范畴，见 §13。
+- **`breakpoint_rawid` 已落库但推进只用 `ts > current`**（同秒 rawid 兜底未启用）：断点本期仅作投递标记/可观测（D5），无 correctness 影响；同秒精定位留待下期心跳消费时再启用。
+
+**可选后续小项**（非阻塞）：`validateDownstreamUpdate` 增 `backoffCapMs >= backoffBaseMs` 交叉校验；如需运行期调熔断阈值/超时，再把这几项接入配置并让 forwarder 惰性重建熔断器。
