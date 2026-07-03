@@ -42,7 +42,8 @@ export class Forwarder {
     private readonly createClient: (cfg: DownstreamConfig) => DownstreamClient
     private readonly clock: () => number
 
-    private enabled = false
+    // 默认启用：drainOnce/kick 可直接工作；暂停走 setEnabled(false)。start() 只负责 resetStuck 自愈 + 兜底 tick。
+    private enabled = true
     private draining = false
     private tickTimer: NodeJS.Timeout | null = null
     private readonly circuit: CircuitBreaker
@@ -75,6 +76,7 @@ export class Forwarder {
 
     setEnabled(on: boolean): void {
         if (on && !this.enabled) this.start()
+        // 暂停仅置标志、故意不清 tick 定时器（unref 的定时器空转、kick 在 disabled 时 no-op），故再启用即时生效
         else if (!on && this.enabled) this.enabled = false
     }
 
@@ -99,12 +101,24 @@ export class Forwarder {
             const client = this.createClient(cfg)
             const policy = this.policyFrom(cfg)
             for (;;) {
+                // 暂停开关：置 disabled 后循环首行退出，响应「暂停转发」
+                if (!this.enabled) return
                 // 后台 drain 可能与关库竞态（如停机 stop→close）：句柄已关则干净退出，不在闭库上取件
                 if (!this.db.raw.open) return
                 if (this.circuit.isOpen()) return
                 const msg = this.db.queue.claimNext(WEFLOW_CHANNEL_ID, this.clock())
                 if (!msg) return
-                await this.processOne(client, policy, msg)
+                // 单条隔离：任一处理异常（DB 写/告警抛错等）不得逃逸成 unhandled rejection，也不能中断整批排空
+                try {
+                    await this.processOne(client, policy, msg)
+                } catch (e) {
+                    const err = e instanceof Error ? e.message : String(e)
+                    this.log.error({ id: msg.id, err }, '[forward] 处理消息异常，退避重试')
+                    // best-effort 把卡在 sending 的行退避重投；DB 不可用等则留给下次 start 的 resetStuck 兜底
+                    try {
+                        this.db.queue.markRetry(msg.id, { failCode: null, retryable: 1, lastError: `处理异常：${err}`, nextAttemptAt: this.clock() + 30 }, this.clock())
+                    } catch { /* 忽略：DB 已关闭/不可用 */ }
+                }
             }
         } finally {
             this.draining = false
@@ -122,17 +136,30 @@ export class Forwarder {
     }
 
     private async processOne(client: DownstreamClient, policy: RetryPolicy, msg: ClaimedMessage): Promise<void> {
+        // 毒消息：rawJson 无法解析属确定性致命错误，直接死信、不烧重试（放在传输 try 之外）
+        let data: unknown
+        try {
+            data = JSON.parse(msg.rawJson)
+        } catch (e) {
+            const now = this.clock()
+            const reason = `rawJson 解析失败：${e instanceof Error ? e.message : String(e)}`
+            this.db.queue.markDead(msg.id, { failCode: 1002, retryable: 0, lastError: reason }, now)
+            this.writeAudit(msg, { code: 1002, duplicate: 0, receivedAt: null }, msg.attempts, 0, now)
+            this.alert.send({ level: 'warn', type: 'dlq_new', title: '消息进死信', message: `id=${msg.id} ${reason}` })
+            return
+        }
+
         const startMs = Date.now()
         let result: SendResult
         let ack: ReceiveAck | null = null
         try {
-            ack = await client.receiveMessage({ event: msg.eventType, data: JSON.parse(msg.rawJson) })
+            ack = await client.receiveMessage({ event: msg.eventType, data })
             result = { type: 'ack', ack }
         } catch (e) {
             result = { type: 'transport', error: e instanceof Error ? e.message : String(e) }
         }
 
-        const attemptsSoFar = this.attemptsOf(msg.id)
+        const attemptsSoFar = msg.attempts
         const outcome = decideOutcome(result, attemptsSoFar, policy)
         const now = this.clock()
         const latencyMs = Date.now() - startMs
@@ -183,9 +210,5 @@ export class Forwarder {
             code: r.code, duplicate: r.duplicate, receivedAt: r.receivedAt,
             latencyMs, attempts, ingestPath: null,
         }, now)
-    }
-
-    private attemptsOf(id: number): number {
-        return this.db.queue.getById(WEFLOW_CHANNEL_ID, id)?.attempts ?? 0
     }
 }

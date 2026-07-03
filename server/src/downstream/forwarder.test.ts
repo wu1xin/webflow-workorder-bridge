@@ -104,6 +104,41 @@ describe('Forwarder.drainOnce', () => {
         await fw.drainOnce()
         expect(db.queue.countByStatus('pending')).toBe(1)
     })
+
+    it('内容错误(1002)不触发熔断', async () => {
+        for (let i = 0; i < 6; i++) enqueue(db, { externalId: `e${i}` })
+        const alerts: string[] = []
+        const fw = makeForwarder(db, () => Promise.resolve({ code: 1002, retryable: false }), { send: (a: { type: string }) => { alerts.push(a.type) } })
+        await fw.drainOnce()
+        expect(db.queue.countByStatus('dead')).toBe(6) // 全部死信、但不熔断
+        expect(alerts).not.toContain('downstream_circuit_open')
+        expect(fw.circuitState()).toBe('closed')
+    })
+
+    it('死信触发 dlq_new 告警', async () => {
+        enqueue(db)
+        const alerts: string[] = []
+        await makeForwarder(db, () => Promise.resolve({ code: 1002, retryable: false }), { send: (a: { type: string }) => { alerts.push(a.type) } }).drainOnce()
+        expect(alerts).toContain('dlq_new')
+    })
+
+    it('毒消息(rawJson 不可解析) → 立即死信、不烧重试', async () => {
+        enqueue(db, { rawJson: '{bad json' })
+        let calls = 0
+        await makeForwarder(db, () => { calls++; return Promise.resolve({ code: 1 }) }).drainOnce()
+        expect(calls).toBe(0) // 没发下游
+        expect(db.queue.countByStatus('dead')).toBe(1)
+        expect(db.queue.getById(WEFLOW_CHANNEL_ID, 1)?.attempts).toBe(1) // 一次即死，未烧满重试
+        expect(db.audit.stats(WEFLOW_CHANNEL_ID)).toEqual({ totalSuccess: 0, totalFail: 1 })
+    })
+
+    it('setEnabled(false) 后循环停止取件', async () => {
+        enqueue(db, { externalId: 'a' }); enqueue(db, { externalId: 'b' })
+        const fw = makeForwarder(db, () => Promise.resolve({ code: 1 }))
+        fw.setEnabled(false)
+        await fw.drainOnce()
+        expect(db.queue.countByStatus('pending')).toBe(2) // enabled=false，循环首行 return，不取件
+    })
 })
 
 describe('Forwarder.start', () => {
