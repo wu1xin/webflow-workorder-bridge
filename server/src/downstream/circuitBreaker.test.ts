@@ -24,4 +24,11 @@ describe('CircuitBreaker', () => {
         t = 1031; expect(cb.isOpen()).toBe(false)
         cb.recordFailure(); t = 1032; expect(cb.isOpen()).toBe(true)
     })
+    it('半开探测成功 → 关闭', () => {
+        let t = 1000
+        const cb = new CircuitBreaker(1, 30, () => t)
+        cb.recordFailure(); expect(cb.isOpen()).toBe(true); expect(cb.state()).toBe('open')
+        t = 1031; expect(cb.isOpen()).toBe(false); expect(cb.state()).toBe('half-open') // 半开
+        cb.recordSuccess(); expect(cb.state()).toBe('closed')
+    })
 })

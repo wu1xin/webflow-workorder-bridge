@@ -30,6 +30,6 @@ export class CircuitBreaker {
 
     state(): CircuitState {
         if (this.openedAt === null) return 'closed'
-        return this.now() - this.openedAt < this.cooldownSec ? 'open' : 'half-open'
+        return this.isOpen() ? 'open' : 'half-open'
     }
 }

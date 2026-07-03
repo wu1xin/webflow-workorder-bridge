@@ -17,20 +17,22 @@ describe('decideOutcome', () => {
     it('可重试耗尽 maxAttempts → dead', () => {
         expect(decideOutcome(ack(1005), 2, POLICY).kind).toBe('dead')
     })
-    it('1002/1003 立即 dead', () => {
-        expect(decideOutcome(ack(1002), 0, POLICY).kind).toBe('dead')
+    it('1002/1003 立即 dead（failCode 落库）', () => {
+        expect(decideOutcome(ack(1002), 0, POLICY)).toMatchObject({ kind: 'dead', failCode: 1002 })
         expect(decideOutcome(ack(1003), 0, POLICY).kind).toBe('dead')
     })
-    it('1001 有限重试（authMaxAttempts=2）：第1次 retry、第2次 dead', () => {
+    it('1001 有限重试（authMaxAttempts=2）：第1次 retry、第2次 dead（failCode 落库）', () => {
         expect(decideOutcome(ack(1001), 0, POLICY).kind).toBe('retry')
-        expect(decideOutcome(ack(1001), 1, POLICY).kind).toBe('dead')
+        expect(decideOutcome(ack(1001), 1, POLICY)).toMatchObject({ kind: 'dead', failCode: 1001 })
     })
     it('显式 retryable=false → dead；retryable=true → retry', () => {
         expect(decideOutcome(ack(0, false), 0, POLICY).kind).toBe('dead')
         expect(decideOutcome(ack(9999, true), 0, POLICY).kind).toBe('retry')
     })
     it('传输层错误 → retry（未耗尽）/ dead（耗尽）', () => {
-        expect(decideOutcome(transport(), 0, POLICY).kind).toBe('retry')
+        const o = decideOutcome(transport(), 0, POLICY)
+        expect(o).toMatchObject({ kind: 'retry', failCode: null })
+        if (o.kind === 'retry') expect(o.lastError).toContain('timeout')
         expect(decideOutcome(transport(), 2, POLICY).kind).toBe('dead')
     })
     it('退避指数增长且封顶', () => {

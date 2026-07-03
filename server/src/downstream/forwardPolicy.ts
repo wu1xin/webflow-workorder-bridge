@@ -49,6 +49,6 @@ export function decideOutcome(result: SendResult, attemptsSoFar: number, p: Retr
     if (code === 1001) return retryOrDead(p.authMaxAttempts, 1001, `鉴权失败(${reason})，查 siteKey/aesKey/时钟`)
     if (code === 1002 || code === 1003) return { kind: 'dead', failCode: code, lastError: reason }
     if (retryable === false) return { kind: 'dead', failCode: code, lastError: reason }
-    if (retryable === true) return retryOrDead(p.maxAttempts, code, reason)
+    // retryable 未给 或 显式 true：0/1004/1005/未识别码按 maxAttempts 退避重试
     return retryOrDead(p.maxAttempts, code, reason)
 }
