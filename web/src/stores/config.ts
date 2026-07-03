@@ -3,8 +3,8 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { BASE } from '@/api/http'
-import { fetchConfig, updateWeflowConfig } from '@/api/config'
-import { type AppConfig, type WeflowConfigUpdate, type WeflowConnectionStatus } from '@wb/shared/types'
+import { fetchConfig, updateWeflowConfig, updateDownstreamConfig } from '@/api/config'
+import { type AppConfig, type DownstreamConfigUpdate, type WeflowConfigUpdate, type WeflowConnectionStatus } from '@wb/shared/types'
 
 /** 连接状态初值：后端首帧到达前先停在「未配置」 */
 function initialConnectionStatus(): WeflowConnectionStatus {
@@ -59,6 +59,18 @@ export const useConfigStore = defineStore(
             })
         }
 
+        /** 保存下游配置；成功后用服务端返回的配置刷新快照（错误向上抛给调用方处理） */
+        function saveDownstream(update: DownstreamConfigUpdate) {
+            return new Promise<void>((resolve, reject) => {
+                updateDownstreamConfig(update).then((cfg) => {
+                    config.value.downstream = JSON.parse(JSON.stringify(cfg))
+                    resolve()
+                }).catch((e) => {
+                    reject(e)
+                })
+            })
+        }
+
         /**
          * 订阅连接状态实时流（幂等）。EventSource 断线会自行重连，
          * 后端重连后重推一份完整快照，无需前端额外补偿。
@@ -90,6 +102,7 @@ export const useConfigStore = defineStore(
             loadError,
             load,
             saveWeflow,
+            saveDownstream,
             connectStatusStream,
             disconnectStatusStream,
         }

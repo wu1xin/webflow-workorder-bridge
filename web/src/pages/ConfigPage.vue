@@ -1,6 +1,7 @@
 <template>
     <div class="config_page">
         <WeflowConfig />
+        <DownstreamConfig />
     </div>
 </template>
 
@@ -8,6 +9,7 @@
 import { onMounted } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import WeflowConfig from '@/components/config/WeflowConfig.vue'
+import DownstreamConfig from '@/components/config/DownstreamConfig.vue'
 
 const store = useConfigStore()
 
