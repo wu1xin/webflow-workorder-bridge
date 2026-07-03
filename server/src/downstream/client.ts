@@ -10,6 +10,12 @@ const TIMEOUT_MS = 30_000
 /** syncGroups 端点路径（不含 query；错误信息只带它，避免泄露含 task_white_token 的完整 URL） */
 const SYNC_GROUPS_PATH = '/extra_server/weflow/syncGroups'
 
+/** receiveMessage 端点路径（同样只用于错误信息，避免泄露含 token 的完整 URL） */
+const RECEIVE_MESSAGE_PATH = '/extra_server/weflow/receiveMessage'
+
+/** ping 端点路径 */
+const PING_PATH = '/extra_server/weflow/ping'
+
 /** syncGroups 请求体（群快照，全量或单群增量同结构） */
 export interface SyncGroupsRequest {
     agentId: string
@@ -22,9 +28,35 @@ export interface SyncGroupsRequest {
     }>
 }
 
+/** receiveMessage 信封（一期不带 file；file 下期媒体链路补） */
+export interface ReceiveEnvelope {
+    event: string
+    data: unknown
+}
+
+/** receiveMessage 解析后的 ACK（code!=1 不抛错，交 forwarder 决策） */
+export interface ReceiveAck {
+    code: number
+    msg?: string
+    retryable?: boolean
+    messageId?: number | string
+    duplicate?: boolean
+    receivedAt?: number
+}
+
+/** ping 结果 */
+export interface PingResult {
+    ok: boolean
+    serverTime?: number
+    version?: string
+    message?: string
+}
+
 /** 下游客户端抽象（便于注桩测试） */
 export interface DownstreamClient {
     syncGroups(req: SyncGroupsRequest): Promise<{ allowed: string[] }>
+    receiveMessage(env: ReceiveEnvelope): Promise<ReceiveAck>
+    ping(): Promise<PingResult>
 }
 
 /**
@@ -93,5 +125,49 @@ export class HttpDownstreamClient implements DownstreamClient {
         const allowed = Array.isArray(body.data?.allowed) ? body.data.allowed : []
         this.log?.debug({ sent: req.groups.length, allowed: allowed.length }, '[downstream] syncGroups 完成')
         return { allowed }
+    }
+
+    // 与 syncGroups 不同：仅传输层失败（非 2xx / 网络错 / JSON 解析失败）抛错，
+    // 业务 code!=1 不抛，原样返回 ACK 交由 forwarder 决策重试/入死信。fetch→json 顺序依赖，用 async/await。
+    async receiveMessage(env: ReceiveEnvelope): Promise<ReceiveAck> {
+        const token = buildTaskWhiteToken(this.cfg.siteKey, this.cfg.aesKey, this.now())
+        const url = `${this.cfg.baseUrl}${RECEIVE_MESSAGE_PATH}?task_white_token=${encodeURIComponent(token)}`
+        const res = await this.fetchImpl(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify(env),
+            signal: AbortSignal.timeout(TIMEOUT_MS),
+        })
+        if (!res.ok) {
+            const text = await res.text().catch(() => '')
+            const snippet = text.slice(0, 500)
+            this.log?.error(
+                { path: RECEIVE_MESSAGE_PATH, status: res.status, body: snippet },
+                `[downstream] receiveMessage 返回 HTTP ${res.status}`,
+            )
+            throw new Error(`下游 ${RECEIVE_MESSAGE_PATH} 返回 HTTP ${res.status}${snippet ? `：${snippet}` : ''}`)
+        }
+        const body = await res.json() as {
+            code?: number
+            msg?: string
+            data?: { retryable?: boolean, message_id?: number | string, duplicate?: boolean, received_at?: number }
+        }
+        return {
+            code: body.code ?? 0,
+            msg: body.msg,
+            retryable: body.data?.retryable,
+            messageId: body.data?.message_id,
+            duplicate: body.data?.duplicate,
+            receivedAt: body.data?.received_at,
+        }
+    }
+
+    async ping(): Promise<PingResult> {
+        const token = buildTaskWhiteToken(this.cfg.siteKey, this.cfg.aesKey, this.now())
+        const url = `${this.cfg.baseUrl}${PING_PATH}?task_white_token=${encodeURIComponent(token)}`
+        const res = await this.fetchImpl(url, { method: 'POST', signal: AbortSignal.timeout(TIMEOUT_MS) })
+        if (!res.ok) return { ok: false, message: `HTTP ${res.status}` }
+        const body = await res.json() as { code?: number, msg?: string, data?: { server_time?: number, version?: string } }
+        return { ok: body.code === 1, serverTime: body.data?.server_time, version: body.data?.version, message: body.msg }
     }
 }

@@ -69,3 +69,60 @@ describe('HttpDownstreamClient.syncGroups', () => {
         expect(body.groups[0].sessionId).toBe('g1@chatroom')
     })
 })
+
+describe('HttpDownstreamClient.receiveMessage', () => {
+    function clientWith(fetchImpl: typeof fetch) {
+        return new HttpDownstreamClient(CFG, undefined, { fetchImpl, now: () => 1750000000 })
+    }
+
+    it('code!==1 不抛错，原样返回 code/retryable 供 forwarder 决策', async () => {
+        const fetchImpl = (() => Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ code: 1002, msg: '缺参', data: { retryable: false } }),
+        })) as unknown as typeof fetch
+        const ack = await clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: { rawid: '1' } })
+        expect(ack.code).toBe(1002)
+        expect(ack.retryable).toBe(false)
+    })
+
+    it('code===1 解析 duplicate/message_id/received_at', async () => {
+        const fetchImpl = (() => Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ code: 1, data: { message_id: 9, duplicate: true, received_at: 1750000001 } }),
+        })) as unknown as typeof fetch
+        const ack = await clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: {} })
+        expect(ack).toMatchObject({ code: 1, duplicate: true, messageId: 9, receivedAt: 1750000001 })
+    })
+
+    it('传输层错误（非200）抛异常，错误信息不含 token', async () => {
+        const fetchImpl = (() => Promise.resolve({
+            ok: false, status: 502, text: () => Promise.resolve('bad gateway'),
+        })) as unknown as typeof fetch
+        await expect(clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: {} }))
+            .rejects.toThrow(/502/)
+    })
+
+    it('URL 带 receiveMessage 端点与 task_white_token，body 为 {event,data} 信封', async () => {
+        let captured: { url: string, body: string } | null = null
+        const fetchImpl = ((url: string, init: { body: string }) => {
+            captured = { url, body: init.body }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ code: 1, data: {} }) })
+        }) as unknown as typeof fetch
+        await clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: { rawid: '1' } })
+        expect(captured!.url).toContain('/extra_server/weflow/receiveMessage?task_white_token=')
+        const body = JSON.parse(captured!.body)
+        expect(body.event).toBe('message.new')
+        expect(body.data.rawid).toBe('1')
+        expect(body.file).toBeUndefined()
+    })
+})
+
+describe('HttpDownstreamClient.ping', () => {
+    it('code===1 → ok=true 且带 server_time/version', async () => {
+        const fetchImpl = (() => Promise.resolve({
+            ok: true, json: () => Promise.resolve({ code: 1, data: { server_time: 1750000000, version: '1.0.0' } }),
+        })) as unknown as typeof fetch
+        const res = await new HttpDownstreamClient(CFG, undefined, { fetchImpl, now: () => 1750000000 }).ping()
+        expect(res).toMatchObject({ ok: true, serverTime: 1750000000, version: '1.0.0' })
+    })
+})
