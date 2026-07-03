@@ -16,4 +16,13 @@ describe('AuditStore', () => {
         store.record({ channelId: CH, platform: 'weflow', eventType: 'message.new', externalId: 's2', conversationId: 'g', msgTimestamp: 100, isMedia: 0, fileId: null, code: 1002, duplicate: 0, receivedAt: 102, latencyMs: 40, attempts: 1, ingestPath: 'catchup' }, 102)
         expect(store.stats(CH)).toEqual({ totalSuccess: 1, totalFail: 1 })
     })
+
+    it('空表 stats 返回 {0,0}', () => {
+        expect(store.stats(CH)).toEqual({ totalSuccess: 0, totalFail: 0 })
+    })
+
+    it('stats 按 channel 隔离', () => {
+        store.record({ channelId: CH, platform: 'weflow', eventType: 'message.new', externalId: 's1', conversationId: 'g', msgTimestamp: 100, isMedia: 0, fileId: null, code: 1, duplicate: 0, receivedAt: 101, latencyMs: 30, attempts: 0, ingestPath: 'catchup' }, 101)
+        expect(store.stats('weflow:other')).toEqual({ totalSuccess: 0, totalFail: 0 })
+    })
 })

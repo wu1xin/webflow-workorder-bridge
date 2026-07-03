@@ -1,5 +1,6 @@
 // audit 表访问：每条消息终态（done/dead）写一行，供状态统计与前端日志。表结构见 schema.ts。
 import type BetterSqlite3 from 'better-sqlite3'
+import type { WeflowIngestPath } from '@wb/shared/types'
 
 export interface AuditInput {
     channelId: string
@@ -15,7 +16,7 @@ export interface AuditInput {
     receivedAt: number | null
     latencyMs: number | null
     attempts: number
-    ingestPath: string | null
+    ingestPath: WeflowIngestPath | null
 }
 
 export class AuditStore {
