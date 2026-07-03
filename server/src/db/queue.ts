@@ -155,17 +155,19 @@ export class QueueStore {
             ORDER BY id LIMIT 1
         `)
         this.toSendingStmt = db.prepare('UPDATE queue SET status = \'sending\', updated_at = @now WHERE id = @id')
-        this.doneStmt = db.prepare('UPDATE queue SET status = \'done\', updated_at = @now WHERE id = @id')
+        this.doneStmt = db.prepare(
+            'UPDATE queue SET status = \'done\', fail_code = NULL, retryable = NULL, last_error = NULL, next_attempt_at = NULL, updated_at = @now WHERE id = @id AND status = \'sending\'',
+        )
         this.retryStmt = db.prepare(`
             UPDATE queue SET status = 'pending', attempts = attempts + 1,
               next_attempt_at = @nextAttemptAt, fail_code = @failCode, retryable = @retryable,
               last_error = @lastError, updated_at = @now
-            WHERE id = @id
+            WHERE id = @id AND status = 'sending'
         `)
         this.deadStmt = db.prepare(`
             UPDATE queue SET status = 'dead', attempts = attempts + 1,
               fail_code = @failCode, retryable = @retryable, last_error = @lastError, updated_at = @now
-            WHERE id = @id
+            WHERE id = @id AND status = 'sending'
         `)
         this.resetStuckStmt = db.prepare(
             'UPDATE queue SET status = \'pending\', updated_at = @now WHERE channel_id = @channelId AND status = \'sending\'',

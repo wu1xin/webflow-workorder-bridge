@@ -222,6 +222,19 @@ describe('QueueStore worker 方法', () => {
         expect(store.countByStatus('done')).toBe(1)
     })
 
+    it('markRetry 持久化 fail_code/next_attempt_at；markDone 清残留错误字段', () => {
+        enq()
+        const c = store.claimNext(CH, 2000)!
+        store.markRetry(c.id, { failCode: 1005, retryable: 1, lastError: 'boom', nextAttemptAt: 2005 }, 2000)
+        let d = store.getById(CH, c.id)!
+        expect(d.lastError).toBe('boom')
+        const c2 = store.claimNext(CH, 3000)! // 到期再取
+        store.markDone(c2.id, 3000)
+        d = store.getById(CH, c2.id)!
+        expect(d.status).toBe('done')
+        expect(d.lastError).toBeNull()
+    })
+
     it('markRetry 回 pending 且 attempts+1', () => {
         enq()
         const c = store.claimNext(CH, 2000)!
