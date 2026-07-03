@@ -181,3 +181,85 @@ describe('QueueStore — 撤回看守 revocable_until', () => {
         expect(store.listOpenRevokeWatches(CH, 1)).toEqual([])
     })
 })
+
+describe('QueueStore worker 方法', () => {
+    const CH = 'weflow:default'
+    let db: BetterSqlite3.Database
+    let store: QueueStore
+    beforeEach(() => { db = new BetterSqlite3(':memory:'); migrate(db); store = new QueueStore(db) })
+    afterEach(() => db.close())
+
+    function enq(over: Partial<EnqueueInput> = {}, now = 1000): void {
+        store.enqueue({
+            channelId: CH, platform: 'weflow', eventType: 'message.new',
+            externalId: 's1', conversationId: 'g@chatroom', senderId: null,
+            msgTimestamp: 100, hasMedia: 0, rawJson: '{"a":1}', mediaJson: null,
+            ingestPath: 'catchup', revocableUntil: null, ...over,
+        }, now)
+    }
+
+    it('claimNext 取最早 pending 文本并置 sending；跳过媒体行', () => {
+        enq({ externalId: 'm1', hasMedia: 1 })
+        enq({ externalId: 't1', hasMedia: 0 })
+        const c = store.claimNext(CH, 2000)
+        expect(c?.externalId).toBe('t1')
+        expect(store.countByStatus('sending')).toBe(1)
+        expect(store.countByStatus('pending')).toBe(1)
+    })
+
+    it('claimNext 跳过未到期（next_attempt_at>now）的行', () => {
+        enq({ externalId: 't1' })
+        const c1 = store.claimNext(CH, 2000)!
+        store.markRetry(c1.id, { failCode: 0, retryable: 1, lastError: 'x', nextAttemptAt: 9999 }, 2000)
+        expect(store.claimNext(CH, 3000)).toBeNull()
+        expect(store.claimNext(CH, 10000)?.externalId).toBe('t1')
+    })
+
+    it('markDone → done', () => {
+        enq()
+        const c = store.claimNext(CH, 2000)!
+        store.markDone(c.id, 2000)
+        expect(store.countByStatus('done')).toBe(1)
+    })
+
+    it('markRetry 回 pending 且 attempts+1', () => {
+        enq()
+        const c = store.claimNext(CH, 2000)!
+        store.markRetry(c.id, { failCode: 1005, retryable: 1, lastError: 'boom', nextAttemptAt: 2005 }, 2000)
+        const d = store.getById(CH, c.id)!
+        expect(d.status).toBe('pending')
+        expect(d.attempts).toBe(1)
+    })
+
+    it('markDead → dead 且 attempts+1', () => {
+        enq()
+        const c = store.claimNext(CH, 2000)!
+        store.markDead(c.id, { failCode: 1002, retryable: 0, lastError: 'bad' }, 2000)
+        const d = store.getById(CH, c.id)!
+        expect(d.status).toBe('dead')
+        expect(d.attempts).toBe(1)
+    })
+
+    it('resetStuck 把残留 sending 全部回 pending', () => {
+        enq({ externalId: 'a' })
+        enq({ externalId: 'b' })
+        store.claimNext(CH, 2000)
+        store.claimNext(CH, 2000)
+        expect(store.countByStatus('sending')).toBe(2)
+        store.resetStuck(CH, 3000)
+        expect(store.countByStatus('sending')).toBe(0)
+        expect(store.countByStatus('pending')).toBe(2)
+    })
+
+    it('retryDead 仅对 dead 生效：回 pending、清计数/错误', () => {
+        enq()
+        const c = store.claimNext(CH, 2000)!
+        store.markDead(c.id, { failCode: 1002, retryable: 0, lastError: 'bad' }, 2000)
+        expect(store.retryDead(CH, c.id, 4000)).toBe(true)
+        const d = store.getById(CH, c.id)!
+        expect(d.status).toBe('pending')
+        expect(d.attempts).toBe(0)
+        expect(d.lastError).toBeNull()
+        expect(store.retryDead(CH, c.id, 5000)).toBe(false)
+    })
+})

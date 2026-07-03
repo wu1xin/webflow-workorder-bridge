@@ -33,6 +33,15 @@ export interface EnqueueInput {
     revocableUntil: number | null
 }
 
+/** claimNext 返回：worker 发送所需的最小字段 */
+export interface ClaimedMessage {
+    id: number
+    eventType: string
+    rawJson: string
+    msgTimestamp: number | null
+    externalId: string | null
+}
+
 /** 撤回对账扫描的一条看守行（revocable_until 仍 > now） */
 export interface RevokeWatch {
     conversationId: string | null
@@ -91,6 +100,7 @@ function toSummary(r: SummaryRow): WeflowMessageSummary {
 }
 
 export class QueueStore {
+    private readonly db: BetterSqlite3.Database
     private readonly insertStmt: BetterSqlite3.Statement
     private readonly countStmt: BetterSqlite3.Statement
     private readonly listStmt: BetterSqlite3.Statement
@@ -98,8 +108,16 @@ export class QueueStore {
     private readonly getByIdStmt: BetterSqlite3.Statement
     private readonly listWatchesStmt: BetterSqlite3.Statement
     private readonly clearWatchStmt: BetterSqlite3.Statement
+    private readonly pickStmt: BetterSqlite3.Statement
+    private readonly toSendingStmt: BetterSqlite3.Statement
+    private readonly doneStmt: BetterSqlite3.Statement
+    private readonly retryStmt: BetterSqlite3.Statement
+    private readonly deadStmt: BetterSqlite3.Statement
+    private readonly resetStuckStmt: BetterSqlite3.Statement
+    private readonly retryDeadStmt: BetterSqlite3.Statement
 
     constructor(db: BetterSqlite3.Database) {
+        this.db = db
         this.insertStmt = db.prepare(`
             INSERT INTO queue(
               channel_id, platform, event_type, external_id, conversation_id, sender_id,
@@ -130,6 +148,33 @@ export class QueueStore {
         this.clearWatchStmt = db.prepare(
             'UPDATE queue SET revocable_until = NULL WHERE channel_id = ? AND external_id = ?',
         )
+        this.pickStmt = db.prepare(`
+            SELECT id, event_type, raw_json, msg_timestamp, external_id FROM queue
+            WHERE channel_id = @channelId AND status = 'pending' AND has_media = 0
+              AND (next_attempt_at IS NULL OR next_attempt_at <= @now)
+            ORDER BY id LIMIT 1
+        `)
+        this.toSendingStmt = db.prepare('UPDATE queue SET status = \'sending\', updated_at = @now WHERE id = @id')
+        this.doneStmt = db.prepare('UPDATE queue SET status = \'done\', updated_at = @now WHERE id = @id')
+        this.retryStmt = db.prepare(`
+            UPDATE queue SET status = 'pending', attempts = attempts + 1,
+              next_attempt_at = @nextAttemptAt, fail_code = @failCode, retryable = @retryable,
+              last_error = @lastError, updated_at = @now
+            WHERE id = @id
+        `)
+        this.deadStmt = db.prepare(`
+            UPDATE queue SET status = 'dead', attempts = attempts + 1,
+              fail_code = @failCode, retryable = @retryable, last_error = @lastError, updated_at = @now
+            WHERE id = @id
+        `)
+        this.resetStuckStmt = db.prepare(
+            'UPDATE queue SET status = \'pending\', updated_at = @now WHERE channel_id = @channelId AND status = \'sending\'',
+        )
+        this.retryDeadStmt = db.prepare(`
+            UPDATE queue SET status = 'pending', attempts = 0, next_attempt_at = NULL,
+              fail_code = NULL, retryable = NULL, last_error = NULL, updated_at = @now
+            WHERE channel_id = @channelId AND id = @id AND status = 'dead'
+        `)
     }
 
     /** 入队一条 pending 消息 */
@@ -188,5 +233,42 @@ export class QueueStore {
         }) | undefined
         if (!r) return null
         return { ...toSummary(r), rawJson: r.raw_json, mediaJson: r.media_json }
+    }
+
+    /** 取下一条待投（pending 文本、已到期），原子置 sending；无则 null */
+    claimNext(channelId: string, now: number): ClaimedMessage | null {
+        return this.db.transaction(() => {
+            const row = this.pickStmt.get({ channelId, now }) as {
+                id: number, event_type: string, raw_json: string, msg_timestamp: number | null, external_id: string | null
+            } | undefined
+            if (!row) return null
+            this.toSendingStmt.run({ id: row.id, now })
+            return { id: row.id, eventType: row.event_type, rawJson: row.raw_json, msgTimestamp: row.msg_timestamp, externalId: row.external_id }
+        })()
+    }
+
+    /** 转发成功：置 done */
+    markDone(id: number, now: number): void {
+        this.doneStmt.run({ id, now })
+    }
+
+    /** 可重试失败：attempts+1、设退避时间、回 pending */
+    markRetry(id: number, info: { failCode: number | null, retryable: 0 | 1, lastError: string, nextAttemptAt: number }, now: number): void {
+        this.retryStmt.run({ id, now, ...info })
+    }
+
+    /** 终止失败：attempts+1、置 dead */
+    markDead(id: number, info: { failCode: number | null, retryable: 0 | 1, lastError: string }, now: number): void {
+        this.deadStmt.run({ id, now, ...info })
+    }
+
+    /** 启动自愈：把残留 sending（崩溃遗留）全部回 pending */
+    resetStuck(channelId: string, now: number): void {
+        this.resetStuckStmt.run({ channelId, now })
+    }
+
+    /** 死信重投：dead → pending 并清计数/错误；非 dead 不动，返回是否命中 */
+    retryDead(channelId: string, id: number, now: number): boolean {
+        return this.retryDeadStmt.run({ channelId, id, now }).changes > 0
     }
 }
