@@ -162,12 +162,18 @@ export class HttpDownstreamClient implements DownstreamClient {
         }
     }
 
+    // 连通性探针：任何传输层异常（网络错/超时/JSON 解析失败）都收敛为 { ok:false, message }，
+    // 绝不抛出 —— 否则测连按钮会拿到无意义的 500 而非「主机不可达」诊断。fetch→json 顺序依赖，用 async/await。
     async ping(): Promise<PingResult> {
         const token = buildTaskWhiteToken(this.cfg.siteKey, this.cfg.aesKey, this.now())
         const url = `${this.cfg.baseUrl}${PING_PATH}?task_white_token=${encodeURIComponent(token)}`
-        const res = await this.fetchImpl(url, { method: 'POST', signal: AbortSignal.timeout(TIMEOUT_MS) })
-        if (!res.ok) return { ok: false, message: `HTTP ${res.status}` }
-        const body = await res.json() as { code?: number, msg?: string, data?: { server_time?: number, version?: string } }
-        return { ok: body.code === 1, serverTime: body.data?.server_time, version: body.data?.version, message: body.msg }
+        try {
+            const res = await this.fetchImpl(url, { method: 'POST', signal: AbortSignal.timeout(TIMEOUT_MS) })
+            if (!res.ok) return { ok: false, message: `HTTP ${res.status}` }
+            const body = await res.json() as { code?: number, msg?: string, data?: { server_time?: number, version?: string } }
+            return { ok: body.code === 1, serverTime: body.data?.server_time, version: body.data?.version, message: body.msg }
+        } catch (e) {
+            return { ok: false, message: e instanceof Error ? e.message : String(e) }
+        }
     }
 }

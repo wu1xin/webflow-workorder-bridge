@@ -10,9 +10,10 @@ export function registerControlRoutes(app: FastifyInstance, ctx: AppContext): vo
         return { status: ctx.manager.getStatus() }
     })
 
-    // 转发总开关：置 enabled 后立即返回生效后的转发状态
-    app.post<{ Body: { enabled: boolean } }>('/api/control/forwarding', async (req) => {
-        ctx.forwarder.setEnabled(req.body?.enabled === true)
+    // 转发总开关：校验 enabled 为布尔后再置位（避免空/错体误关转发），返回生效后的转发状态
+    app.post<{ Body: { enabled: boolean } }>('/api/control/forwarding', async (req, reply) => {
+        if (typeof req.body?.enabled !== 'boolean') return reply.code(400).send({ error: '缺少 enabled（布尔）' })
+        ctx.forwarder.setEnabled(req.body.enabled)
         return { forwarding: ctx.forwarder.isEnabled() }
     })
 }

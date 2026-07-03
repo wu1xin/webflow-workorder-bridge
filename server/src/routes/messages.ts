@@ -5,12 +5,11 @@ import type { FastifyInstance } from 'fastify'
 import type { WeflowMessagePage, WeflowMessageStatus, WeflowIngestPath } from '@wb/shared/types'
 import type { QueueListFilter } from '../db/queue.js'
 import { WEFLOW_CHANNEL_ID } from '../weflow/adapter.js'
+import { PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX, parsePositiveInt } from './pagination.js'
 import type { AppContext } from './context.js'
 
 const STATUSES: readonly WeflowMessageStatus[] = ['pending', 'sending', 'done', 'dead']
 const INGEST_PATHS: readonly WeflowIngestPath[] = ['sse', 'catchup']
-const PAGE_SIZE_MAX = 100
-const PAGE_SIZE_DEFAULT = 20
 
 interface ListQuery {
     conversationId?: string
@@ -19,13 +18,6 @@ interface ListQuery {
     ingestPath?: string
     page?: string
     pageSize?: string
-}
-
-/** 解析正整数；非法返回 null */
-function parsePositiveInt(raw: string | undefined): number | null {
-    if (raw === undefined) return null
-    const n = Number(raw)
-    return Number.isInteger(n) && n > 0 ? n : null
 }
 
 export function registerMessageRoutes(app: FastifyInstance, ctx: AppContext): void {

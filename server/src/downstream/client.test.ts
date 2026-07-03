@@ -138,4 +138,11 @@ describe('HttpDownstreamClient.ping', () => {
         expect(res.ok).toBe(false)
         expect(res.message).toContain('503')
     })
+
+    it('网络错误 → ok=false 不抛，携带错误信息', async () => {
+        const fetchImpl = (() => Promise.reject(new Error('connect ECONNREFUSED'))) as unknown as typeof fetch
+        const res = await new HttpDownstreamClient(CFG, undefined, { fetchImpl, now: () => 1750000000 }).ping()
+        expect(res.ok).toBe(false)
+        expect(res.message).toContain('ECONNREFUSED')
+    })
 })
