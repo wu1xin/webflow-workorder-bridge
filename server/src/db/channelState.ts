@@ -8,6 +8,8 @@ export interface ChannelState {
     installTime: number | null
     lastSyncTimestamp: number | null
     lastSyncRawid: string | null
+    breakpointTimestamp: number | null
+    breakpointRawid: string | null
 }
 
 interface Row {
@@ -16,16 +18,19 @@ interface Row {
     install_time: number | null
     last_sync_timestamp: number | null
     last_sync_rawid: string | null
+    breakpoint_timestamp: number | null
+    breakpoint_rawid: string | null
 }
 
 export class ChannelStateStore {
     private readonly getStmt: BetterSqlite3.Statement
     private readonly installStmt: BetterSqlite3.Statement
     private readonly watermarkStmt: BetterSqlite3.Statement
+    private readonly breakpointStmt: BetterSqlite3.Statement
 
     constructor(db: BetterSqlite3.Database) {
         this.getStmt = db.prepare(
-            'SELECT channel_id, platform, install_time, last_sync_timestamp, last_sync_rawid FROM channel_state WHERE channel_id = ?',
+            'SELECT channel_id, platform, install_time, last_sync_timestamp, last_sync_rawid, breakpoint_timestamp, breakpoint_rawid FROM channel_state WHERE channel_id = ?',
         )
         // 写 install_time：行不存在则插入；已存在且非空则保留原值（COALESCE 不覆盖）
         this.installStmt = db.prepare(`
@@ -43,6 +48,14 @@ export class ChannelStateStore {
               last_sync_rawid     = @rawid,
               updated_at          = @now
         `)
+        this.breakpointStmt = db.prepare(`
+            INSERT INTO channel_state(channel_id, platform, breakpoint_timestamp, breakpoint_rawid, updated_at)
+            VALUES (@channelId, @platform, @ts, @rawid, @now)
+            ON CONFLICT(channel_id) DO UPDATE SET
+              breakpoint_timestamp = @ts,
+              breakpoint_rawid     = @rawid,
+              updated_at           = @now
+        `)
     }
 
     /** 取整行状态（不存在返回 null） */
@@ -55,6 +68,8 @@ export class ChannelStateStore {
             installTime: row.install_time,
             lastSyncTimestamp: row.last_sync_timestamp,
             lastSyncRawid: row.last_sync_rawid,
+            breakpointTimestamp: row.breakpoint_timestamp,
+            breakpointRawid: row.breakpoint_rawid,
         }
     }
 
@@ -73,6 +88,14 @@ export class ChannelStateStore {
         const current = this.get(channelId)?.lastSyncTimestamp ?? 0
         if (ts > current) {
             this.watermarkStmt.run({ channelId, platform, ts, rawid, now })
+        }
+    }
+
+    /** 推进投递断点：仅当 ts 大于当前断点时写入（单调，绝不回退） */
+    advanceBreakpoint(channelId: string, platform: string, ts: number, rawid: string, now: number): void {
+        const current = this.get(channelId)?.breakpointTimestamp ?? 0
+        if (ts > current) {
+            this.breakpointStmt.run({ channelId, platform, ts, rawid, now })
         }
     }
 }

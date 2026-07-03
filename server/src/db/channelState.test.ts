@@ -45,4 +45,23 @@ describe('ChannelStateStore', () => {
         store.markInstalled('weflow:a', PLATFORM, 1)
         expect(store.getInstallTime('weflow:b')).toBeNull()
     })
+
+    it('advanceBreakpoint 仅在更大时推进，get 能读回', () => {
+        store.advanceBreakpoint(CH, PLATFORM, 100, 'r1', 1)
+        expect(store.get(CH)?.breakpointTimestamp).toBe(100)
+        store.advanceBreakpoint(CH, PLATFORM, 50, 'r0', 2) // 更小，不动
+        expect(store.get(CH)?.breakpointTimestamp).toBe(100)
+        expect(store.get(CH)?.breakpointRawid).toBe('r1')
+        store.advanceBreakpoint(CH, PLATFORM, 200, 'r2', 3)
+        expect(store.get(CH)?.breakpointTimestamp).toBe(200)
+        expect(store.get(CH)?.breakpointRawid).toBe('r2')
+    })
+
+    it('断点与同步水位互不干扰', () => {
+        store.advanceWatermark(CH, PLATFORM, 500, 'w', 1)
+        store.advanceBreakpoint(CH, PLATFORM, 100, 'b', 2)
+        const s = store.get(CH)
+        expect(s?.lastSyncTimestamp).toBe(500)
+        expect(s?.breakpointTimestamp).toBe(100)
+    })
 })
