@@ -12,6 +12,12 @@ describe('validateDownstreamUpdate', () => {
     it('aesKey 不足 16 字节 → 报错', () => {
         expect(validateDownstreamUpdate({ ...ok, aesKey: 'short' }).errors.aesKey).toBeTruthy()
     })
+    it('aesKey 尾随空格 trim 后不足 16 → 报错', () => {
+        expect(validateDownstreamUpdate({ ...ok, aesKey: 'abcdefghijkl    ' }).errors.aesKey).toBeTruthy() // 12 字符+4 空格
+    })
+    it('baseUrl 协议非 http/https → 报错', () => {
+        expect(validateDownstreamUpdate({ ...ok, baseUrl: 'ftp://host/x' }).errors.baseUrl).toBeTruthy()
+    })
     it('siteKey 空 → 报错', () => {
         expect(validateDownstreamUpdate({ ...ok, siteKey: '' }).errors.siteKey).toBeTruthy()
     })

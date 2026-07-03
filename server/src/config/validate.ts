@@ -95,16 +95,19 @@ export function validateDownstreamUpdate(update: DownstreamConfigUpdate): Valida
     if (typeof update.siteKey !== 'string' || !update.siteKey.trim()) {
         errors.siteKey = '请输入站点 key'
     }
-    if (typeof update.aesKey !== 'string' || Buffer.from(update.aesKey, 'ascii').length < 16) {
+    if (typeof update.aesKey !== 'string' || Buffer.from(update.aesKey.trim(), 'ascii').length < 16) {
         errors.aesKey = 'AES 密钥不足 16 字节（AES-128 取前 16 字节）'
     }
 
     const f = update.forwarder
     if (f) {
+        const labels: Record<keyof typeof DOWNSTREAM_LIMITS, string> = {
+            maxAttempts: '最大重试次数', backoffBaseMs: '退避基数(ms)', backoffCapMs: '退避上限(ms)',
+        }
         const check = (key: keyof typeof DOWNSTREAM_LIMITS) => {
             const v = f[key]
             if (v === undefined) return
-            checkIntRange(errors, `forwarder.${key}`, v, DOWNSTREAM_LIMITS[key], key)
+            checkIntRange(errors, `forwarder.${key}`, v, DOWNSTREAM_LIMITS[key], labels[key])
         }
         check('maxAttempts'); check('backoffBaseMs'); check('backoffCapMs')
     }
