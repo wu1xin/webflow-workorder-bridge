@@ -37,6 +37,14 @@ describe('GroupSyncService.syncAll', () => {
         expect(db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, 'g2@chatroom')).toBe(false)
     })
 
+    it('SyncGroupsRequest.avatarUrl 带上 chat_group 已存的群头像', async () => {
+        db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, 'g1@chatroom', { avatarUrl: 'https://av/g1.png' }, 1)
+        let sent: SyncGroupsRequest | null = null
+        const service = svc((req) => { sent = req; return Promise.resolve({ allowed: [] }) })
+        await service.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [{ username: 'g1@chatroom', displayName: '群一', type: 2 }])
+        expect(sent!.groups[0].avatarUrl).toBe('https://av/g1.png')
+    })
+
     it('无群时不调用下游', async () => {
         let called = false
         const service = svc(() => { called = true; return Promise.resolve({ allowed: [] }) })

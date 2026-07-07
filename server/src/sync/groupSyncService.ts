@@ -60,12 +60,15 @@ export class GroupSyncService {
         if (groups.length === 0) return Promise.resolve()
 
         const sentIds = groups.map(g => g.username)
+        // 群头像来自消息同步侧 chatlab meta.groupAvatar 落库的 chat_group.avatar_url，此处带上推给下游
+        const avatarByConv = new Map(this.db.chatGroup.listAll(channelId).map(g => [g.conversationId, g.avatarUrl]))
         const req: SyncGroupsRequest = {
             agentId: channelId,
             platform,
             groups: groups.map(g => ({
                 sessionId: g.username,
                 groupName: g.displayName ?? null,
+                avatarUrl: avatarByConv.get(g.username) ?? null,
                 lastMessageAt: g.lastTimestamp ?? null,
             })),
         }
