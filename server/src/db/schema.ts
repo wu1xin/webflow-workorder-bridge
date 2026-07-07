@@ -2,11 +2,12 @@
 // v3 新增 chat_group（群聊登记 + 下游推送裁决）。
 // v4 给 queue 加 revocable_until（撤回对账看守的截止时间，见 2026-06-29-weflow-撤回检测-design.md）。
 // v5 给 channel_state 加投递断点列 breakpoint_timestamp/breakpoint_rawid（下游转发进度水位，独立于 last_sync_timestamp 入队水位）。
+// v6 给 queue 加 sender_name/sender_avatar（下游展示发送人名字+头像，见 docs/plans/2026-07-06-下游消息发送人身份补全-design.md）。
 // 设计依据见 docs/plans/2026-06-23-multi-upstream-schema-design.md。
 import type BetterSqlite3 from 'better-sqlite3'
 
 /** 库结构版本：结构有破坏性变更时 +1，并在 migrate 中补迁移分支 */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 const DDL = `
 -- 1. meta —— 全局单例状态（仅放真正全局的键，如 schemaVersion）
@@ -45,6 +46,8 @@ CREATE TABLE IF NOT EXISTS queue (
   external_id     TEXT,                                     -- 上游原生消息 ID（展示/排障，未必全局唯一）
   conversation_id TEXT,                                     -- 会话/群/chat ID
   sender_id       TEXT,                                     -- 发送者标识
+  sender_name     TEXT,                                     -- 发送人昵称（chatlab members.accountName，可空）
+  sender_avatar   TEXT,                                     -- 发送人头像 URL（chatlab members.avatar，可空）
   msg_timestamp   INTEGER,                                  -- 消息秒级时间戳
   has_media       INTEGER NOT NULL DEFAULT 0,               -- 是否含媒体：1 是 | 0 否
   raw_json        TEXT    NOT NULL,                         -- 上游原始整包 JSON（保真，便于回溯/换格式重转）
@@ -161,6 +164,11 @@ export function migrate(db: BetterSqlite3.Database): void {
             const hasRevocable = (db.pragma('table_info(queue)') as Array<{ name: string }>)
                 .some(c => c.name === 'revocable_until')
             if (!hasRevocable) db.exec('ALTER TABLE queue ADD COLUMN revocable_until INTEGER')
+
+            // queue sender 身份列（v6）：老库有表无列 → 补列；全新库此时无表，跳过由 DDL 带出。
+            const qCols = (db.pragma('table_info(queue)') as Array<{ name: string }>).map(c => c.name)
+            if (!qCols.includes('sender_name')) db.exec('ALTER TABLE queue ADD COLUMN sender_name TEXT')
+            if (!qCols.includes('sender_avatar')) db.exec('ALTER TABLE queue ADD COLUMN sender_avatar TEXT')
         }
 
         // channel_state 断点列（v5）：老库有表无列 → 补列；全新库此时无表，跳过由 DDL 带出。

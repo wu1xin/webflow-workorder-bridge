@@ -9,15 +9,15 @@ function exists(db: BetterSqlite3.Database, name: string): boolean {
     return db.prepare('SELECT 1 FROM sqlite_master WHERE name = ?').get(name) !== undefined
 }
 
-describe('schema v5', () => {
+describe('schema v6', () => {
     let db: BetterSqlite3.Database
     beforeEach(() => { db = new BetterSqlite3(':memory:'); migrate(db) })
     afterEach(() => db.close())
 
-    it('SCHEMA_VERSION 为 5 且写入 meta', () => {
-        expect(SCHEMA_VERSION).toBe(5)
+    it('SCHEMA_VERSION 为 6 且写入 meta', () => {
+        expect(SCHEMA_VERSION).toBe(6)
         const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(row.value).toBe('5')
+        expect(row.value).toBe('6')
     })
 
     it('channel_state 含投递断点列', () => {
@@ -41,15 +41,15 @@ describe('schema v5', () => {
         const row = db.prepare('SELECT last_sync_timestamp t FROM channel_state WHERE channel_id = ?').get('weflow:default') as { t: number }
         expect(row.t).toBe(123)
         const ver = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(ver.value).toBe('5')
+        expect(ver.value).toBe('6')
     })
 
     it('queue 含归一化信封列 + revocable_until，且不再有旧 source 列', () => {
         const cols = columns(db, 'queue')
         expect(cols).toEqual(expect.arrayContaining([
             'channel_id', 'platform', 'event_type', 'external_id', 'conversation_id',
-            'sender_id', 'msg_timestamp', 'has_media', 'raw_json', 'media_json', 'ingest_path',
-            'revocable_until',
+            'sender_id', 'sender_name', 'sender_avatar', 'msg_timestamp', 'has_media',
+            'raw_json', 'media_json', 'ingest_path', 'revocable_until',
         ]))
         expect(cols).not.toContain('source')
         expect(cols).not.toContain('data_json')
@@ -69,7 +69,7 @@ describe('schema v5', () => {
         expect(columns(db, 'queue')).toContain('revocable_until')
         expect(db.prepare('SELECT COUNT(*) c FROM queue').get()).toEqual({ c: 1 })
         const ver = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(ver.value).toBe('5')
+        expect(ver.value).toBe('6')
     })
 
     it('dedup 主键为 channel_id + dedup_key', () => {
@@ -109,6 +109,21 @@ describe('schema v5', () => {
         expect(columns(db, 'queue')).toContain('revocable_until')
     })
 
+    it('v5→v6 增量升级：queue 补 sender_name/sender_avatar 且保留既有数据', () => {
+        db.exec('ALTER TABLE queue DROP COLUMN sender_name')
+        db.exec('ALTER TABLE queue DROP COLUMN sender_avatar')
+        db.prepare('UPDATE meta SET value = ? WHERE key = ?').run('5', 'schemaVersion')
+        db.prepare(`INSERT INTO queue(channel_id, platform, raw_json, ingest_path, status, attempts, created_at, updated_at)
+                    VALUES ('weflow:default','weflow','{}','catchup','pending',0,1,1)`).run()
+
+        migrate(db)
+
+        expect(columns(db, 'queue')).toEqual(expect.arrayContaining(['sender_name', 'sender_avatar']))
+        expect(db.prepare('SELECT COUNT(*) c FROM queue').get()).toEqual({ c: 1 })
+        const ver = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
+        expect(ver.value).toBe('6')
+    })
+
     it('v2→v5 增量升级：补建 chat_group + revocable_until 且保留既有数据', () => {
         // 用迁移好的 v5 库模拟「老 v2 库」：删掉 v3(chat_group)/v4(索引+列) 新增 + 回退版本号 + 塞一条 queue
         db.exec('DROP TABLE chat_group')
@@ -124,7 +139,7 @@ describe('schema v5', () => {
         expect(columns(db, 'queue')).toContain('revocable_until')
         expect(db.prepare('SELECT COUNT(*) c FROM queue').get()).toEqual({ c: 1 })
         const ver = db.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(ver.value).toBe('5')
+        expect(ver.value).toBe('6')
     })
 
     it('v1→v5 升级路径：DROP 旧表并清理旧水位键', () => {
@@ -146,7 +161,7 @@ describe('schema v5', () => {
         expect(keys).not.toContain('lastSyncTimestamp')
         expect(keys).not.toContain('lastSyncRawid')
         const ver = v1.prepare('SELECT value FROM meta WHERE key = ?').get('schemaVersion') as { value: string }
-        expect(ver.value).toBe('5')
+        expect(ver.value).toBe('6')
         v1.close()
     })
 })
