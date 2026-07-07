@@ -7,7 +7,7 @@
 import type { ConfigStore } from '../config/store.js'
 import type { WeflowConfig, SyncGroupsResult } from '@wb/shared/types'
 import type { Db } from '../db/database.js'
-import { WeflowRestClient, type WeflowMessage, type WeflowSession, type MessagesPage } from '../weflow/restClient.js'
+import { WeflowRestClient, type WeflowMessage, type WeflowSession, type MessagesPage, type MembersResult, type MemberInfo } from '../weflow/restClient.js'
 import { WeflowAdapter, WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM } from '../weflow/adapter.js'
 import type { AlertChannel, SyncCoordinator, SyncReason } from '../weflow/hooks.js'
 import type { Logger } from '../weflow/logger.js'
@@ -63,6 +63,7 @@ export function parseRealtimeTrigger(data: string): RealtimeTrigger | null {
 export interface WeflowClientLike {
     listSessions(): Promise<WeflowSession[]>
     fetchMessagesPage(talker: string, start: number, offset: number, limit?: number, end?: number): Promise<MessagesPage>
+    fetchMembers(talker: string, start: number, offset: number, limit?: number, end?: number): Promise<MembersResult>
 }
 
 export interface SyncServiceDeps {
@@ -141,6 +142,20 @@ export class SyncService implements SyncCoordinator {
     }
 
     /**
+     * 手动「强制全量重拉」（POST /api/sync/full）：无视同步水位，从头拉所有放行群的全部历史。
+     * 复用 runFullSync（begin 防并发；dedup 兜底幂等——已入库的不会重复入队，可安全反复触发）。
+     * 用于删库/丢数据后重建：库空则全量回灌，库非空则只补真正缺失的消息。
+     * @returns accepted=false 表示已有同步在跑（防并发）。
+     */
+    triggerFullSync(): { accepted: boolean, status: SyncProgress } {
+        if (this.progress.running) {
+            return { accepted: false, status: this.getStatus() }
+        }
+        void this.runFullSync()
+        return { accepted: true, status: this.getStatus() }
+    }
+
+    /**
      * 手动「立即同步群」（POST /api/weflow/groups/sync）：拉会话 → 群同步/入库 → 回报群总数/放行数。
      * 复用 runFullSync 的 listSessions→syncGroups 段；与消息同步不互斥（群同步幂等、轻量），
      * 仅用 groupSyncing 防自身重入。下游失败由 syncAll 内部吞掉并标 failed，调用方重拉列表看各行状态。
@@ -163,10 +178,11 @@ export class SyncService implements SyncCoordinator {
             .finally(() => { this.groupSyncing = false })
     }
 
-    // ── 全量同步（首装） ─────────────────────────────────────────────
+    // ── 全量同步（首装 / 强制重拉） ─────────────────────────────────────
     async runFullSync(): Promise<void> {
-        if (!this.begin('full', null)) return
+        // cfg 先取（与 runCompensation 一致）：未配置时在置忙前抛出，避免 progress.running 卡死
         const cfg = this.cfg()
+        if (!this.begin('full', null)) return
         const client = this.createClient(cfg)
         try {
             if (this.db.channelState.getInstallTime(WEFLOW_CHANNEL_ID) === null) {
@@ -273,11 +289,31 @@ export class SyncService implements SyncCoordinator {
             }
             if (page.messages.length === 0) break
             const now = nowSec()
+            const members = await this.resolvePageMembers(client, talker, start, offset, now)
             for (const msg of page.messages) {
-                this.processMessage(talker, msg, now, watermark)
+                this.processMessage(talker, msg, now, watermark, members)
             }
             offset += page.messages.length
             if (!page.hasMore) break
+        }
+    }
+
+    /**
+     * 取某会话某窗口的成员映射（chatlab），顺手把群名/群头像 upsert 进 chat_group。
+     * best-effort：chatlab 请求失败仅记日志、返回空映射，绝不阻断正文落库。
+     */
+    private async resolvePageMembers(
+        client: WeflowClientLike, talker: string, start: number, offset: number, now: number,
+    ): Promise<Map<string, MemberInfo>> {
+        try {
+            const r = await client.fetchMembers(talker, start, offset, PAGE_SIZE)
+            if (r.groupName !== null || r.groupAvatar !== null) {
+                this.db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, talker, { groupName: r.groupName, avatarUrl: r.groupAvatar }, now)
+            }
+            return r.members
+        } catch (e) {
+            this.log.warn({ talker, start, offset, err: e instanceof Error ? e.message : String(e) }, '[sync] 取成员映射失败，本页发送人身份降级为空')
+            return new Map()
         }
     }
 
@@ -287,8 +323,9 @@ export class SyncService implements SyncCoordinator {
         msg: WeflowMessage,
         now: number,
         watermark: { ts: number, rawid: string },
+        members: Map<string, MemberInfo>,
     ): void {
-        const { status, normalized: n } = this.ingestOne(talker, msg, now, 'catchup')
+        const { status, normalized: n } = this.ingestOne(talker, msg, now, 'catchup', members)
         if (status === 'skipped') return
         this.progress.messagesPulled += 1
         if (status === 'duplicate') {
@@ -312,6 +349,7 @@ export class SyncService implements SyncCoordinator {
         msg: WeflowMessage,
         now: number,
         ingestPath: 'sse' | 'catchup' | 'reconcile',
+        members: Map<string, MemberInfo> = new Map(),
     ): { status: 'enqueued' | 'duplicate' | 'skipped', normalized: NormalizedMessage } {
         const n = this.adapter.normalize({ talker, message: msg })
         // 撤回行（原地改写、serverId 同原消息）不是新消息：不当普通消息入队。
@@ -325,6 +363,7 @@ export class SyncService implements SyncCoordinator {
         if (!this.db.dedup.markIfNew(WEFLOW_CHANNEL_ID, n.dedupKey, now)) {
             return { status: 'duplicate', normalized: n }
         }
+        const info = n.senderId !== null ? members.get(n.senderId) : undefined
         this.db.queue.enqueue({
             channelId: WEFLOW_CHANNEL_ID,
             platform: WEFLOW_PLATFORM,
@@ -332,6 +371,8 @@ export class SyncService implements SyncCoordinator {
             externalId: n.externalId,
             conversationId: n.conversationId,
             senderId: n.senderId,
+            senderName: info?.name ?? null,
+            senderAvatar: info?.avatar ?? null,
             msgTimestamp: n.msgTimestamp,
             hasMedia: n.media.length > 0 ? 1 : 0,
             rawJson: n.rawJson,
@@ -436,8 +477,9 @@ export class SyncService implements SyncCoordinator {
             const page = await client.fetchMessagesPage(talker, start, offset, PAGE_SIZE)
             if (page.messages.length === 0) break
             const now = nowSec()
+            const members = await this.resolvePageMembers(client, talker, start, offset, now)
             for (const msg of page.messages) {
-                this.ingestOne(talker, msg, now, 'sse')
+                this.ingestOne(talker, msg, now, 'sse', members)
             }
             offset += page.messages.length
             if (!page.hasMore) break
@@ -550,6 +592,8 @@ export class SyncService implements SyncCoordinator {
                 externalId: serverId,
                 conversationId: talker,
                 senderId: null,
+                senderName: null,
+                senderAvatar: null,
                 msgTimestamp: typeof msg.createTime === 'number' ? msg.createTime : now,
                 hasMedia: 0,
                 rawJson: JSON.stringify(msg),

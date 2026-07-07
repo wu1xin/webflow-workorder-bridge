@@ -1,18 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Db } from '../db/database.js'
 import { SyncService, parseRealtimeTrigger } from './syncService.js'
 import { WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM } from '../weflow/adapter.js'
-import type { WeflowSession, MessagesPage } from '../weflow/restClient.js'
+import type { WeflowSession, MessagesPage, MembersResult } from '../weflow/restClient.js'
 
 /** 构造一条 SSE 事件（默认 message.new） */
 function sseEvent(sessionId: string, ts: number, event = 'message.new') {
     return { event, data: JSON.stringify({ event, sessionId, rawid: `r${ts}`, content: 'hi', timestamp: ts }) }
 }
 
-function stubClient(sessions: WeflowSession[], pages: Record<string, MessagesPage>) {
+function stubClient(sessions: WeflowSession[], pages: Record<string, MessagesPage>, members: Record<string, MembersResult> = {}) {
     return {
         listSessions: () => Promise.resolve(sessions),
         fetchMessagesPage: (talker: string) => Promise.resolve(pages[talker] ?? { messages: [], hasMore: false }),
+        fetchMembers: (talker: string) => Promise.resolve(members[talker] ?? { groupName: null, groupAvatar: null, members: new Map() }),
     }
 }
 
@@ -97,6 +98,38 @@ describe('SyncService 全量同步（仅群聊 + 仅放行群）', () => {
         expect(db.queue.countByStatus('pending')).toBe(0)
     })
 
+    it('补全发送人名字/头像入 queue 列，并 upsert 群头像', async () => {
+        allowGroup(db, 'proj@chatroom')
+        const client = stubClient(
+            [{ username: 'proj@chatroom', type: 2 }],
+            { 'proj@chatroom': { messages: [{ serverId: 's1', createTime: 100, senderUsername: 'wxid_a', content: 'a' }], hasMore: false } },
+            { 'proj@chatroom': {
+                groupName: '项目群', groupAvatar: 'https://av/g.png',
+                members: new Map([['wxid_a', { name: '无心', avatar: 'https://av/a.png' }]]),
+            } },
+        )
+        await new SyncService(deps(db, client)).runFullSync()
+
+        const row = db.raw.prepare('SELECT sender_name, sender_avatar FROM queue').get() as { sender_name: string, sender_avatar: string }
+        expect(row.sender_name).toBe('无心')
+        expect(row.sender_avatar).toBe('https://av/a.png')
+        expect(db.chatGroup.listAll(WEFLOW_CHANNEL_ID)[0].avatarUrl).toBe('https://av/g.png')
+    })
+
+    it('fetchMembers 失败不阻断落库，sender 降级为 null', async () => {
+        allowGroup(db, 'proj@chatroom')
+        const client = {
+            listSessions: () => Promise.resolve([{ username: 'proj@chatroom', type: 2 }]),
+            fetchMessagesPage: () => Promise.resolve({ messages: [{ serverId: 's1', createTime: 100, senderUsername: 'wxid_a' }], hasMore: false }),
+            fetchMembers: () => Promise.reject(new Error('chatlab boom')),
+        }
+        await new SyncService(deps(db, client as never)).runFullSync()
+
+        expect(db.queue.countByStatus('pending')).toBe(1)
+        const row = db.raw.prepare('SELECT sender_name FROM queue').get() as { sender_name: string | null }
+        expect(row.sender_name).toBeNull()
+    })
+
     it('新入队时触发 onEnqueued 回调（供 forwarder kick）', async () => {
         allowGroup(db, 'proj@chatroom')
         let kicks = 0
@@ -108,6 +141,48 @@ describe('SyncService 全量同步（仅群聊 + 仅放行群）', () => {
         const svc = new SyncService({ ...d, onEnqueued: () => { kicks++ } })
         await svc.runFullSync()
         expect(kicks).toBeGreaterThanOrEqual(1)
+    })
+})
+
+describe('SyncService.triggerFullSync（强制全量重拉）', () => {
+    let db: Db
+    beforeEach(() => { db = Db.openMemory() })
+    afterEach(() => db.close())
+
+    it('无视水位从头拉全部历史入队，accepted=true 且立即置忙', async () => {
+        allowGroup(db, 'proj@chatroom')
+        // 预置一个高水位：全量重拉应无视它、仍从 0 拉（否则 100/200 会被跳过）
+        db.channelState.advanceWatermark(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, 500, 'r500', 1)
+        const client = stubClient(
+            [{ username: 'proj@chatroom', type: 2 }],
+            { 'proj@chatroom': { messages: [
+                { serverId: 's1', createTime: 100, content: 'a' },
+                { serverId: 's2', createTime: 200, content: 'b' },
+            ], hasMore: false } },
+        )
+        const svc = new SyncService(deps(db, client))
+        const res = svc.triggerFullSync()
+        expect(res.accepted).toBe(true)
+        expect(res.status.running).toBe(true)
+        expect(res.status.mode).toBe('full')
+
+        await vi.waitFor(() => expect(svc.getStatus().running).toBe(false))
+        expect(db.queue.countByStatus('pending')).toBe(2)
+    })
+
+    it('已有同步在跑：第二次 accepted=false', async () => {
+        allowGroup(db, 'proj@chatroom')
+        let release = () => {}
+        const gate = new Promise<void>((r) => { release = r })
+        const client = {
+            listSessions: () => gate.then(() => [{ username: 'proj@chatroom', type: 2 }] as WeflowSession[]),
+            fetchMessagesPage: () => Promise.resolve({ messages: [], hasMore: false }),
+        }
+        const svc = new SyncService(deps(db, client as never))
+        expect(svc.triggerFullSync().accepted).toBe(true)
+        expect(svc.triggerFullSync().accepted).toBe(false)
+        release()
+        await vi.waitFor(() => expect(svc.getStatus().running).toBe(false))
     })
 })
 
@@ -362,7 +437,7 @@ describe('SyncService 撤回检测（revocable_until 看守 + 对账扫描）', 
     function enqueueWatch(conv: string, serverId: string, revocableUntil: number, msgTs: number) {
         db.queue.enqueue({
             channelId: WEFLOW_CHANNEL_ID, platform: WEFLOW_PLATFORM, eventType: 'message.new',
-            externalId: serverId, conversationId: conv, senderId: 'u', msgTimestamp: msgTs,
+            externalId: serverId, conversationId: conv, senderId: 'u', senderName: null, senderAvatar: null, msgTimestamp: msgTs,
             hasMedia: 0, rawJson: '{}', mediaJson: null, ingestPath: 'sse', revocableUntil,
         }, msgTs)
     }
