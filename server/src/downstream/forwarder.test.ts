@@ -11,8 +11,9 @@ const CFG = { baseUrl: 'https://dn', siteKey: 'k', aesKey: 'sixteen-byte-key' }
 function enqueue(db: Db, over: Partial<EnqueueInput> = {}, now = 1000) {
     db.queue.enqueue({
         channelId: WEFLOW_CHANNEL_ID, platform: WEFLOW_PLATFORM, eventType: 'message.new',
-        externalId: 's1', conversationId: 'g@chatroom', senderId: null, msgTimestamp: 100,
-        hasMedia: 0, rawJson: '{"rawid":"s1"}', mediaJson: null, ingestPath: 'catchup', revocableUntil: null, ...over,
+        externalId: 's1', conversationId: 'g@chatroom', senderId: null, senderName: null, senderAvatar: null,
+        msgTimestamp: 100, hasMedia: 0, rawJson: '{"rawid":"s1"}', mediaJson: null,
+        ingestPath: 'catchup', revocableUntil: null, ...over,
     }, now)
 }
 
@@ -33,6 +34,29 @@ describe('Forwarder.drainOnce', () => {
         expect(db.queue.countByStatus('done')).toBe(1)
         expect(db.channelState.get(WEFLOW_CHANNEL_ID)?.breakpointTimestamp).toBe(100)
         expect(db.audit.stats(WEFLOW_CHANNEL_ID)).toEqual({ totalSuccess: 1, totalFail: 0 })
+    })
+
+    it('把 conversationId 作为顶层 sessionId 透传给下游', async () => {
+        enqueue(db, { conversationId: 'room123@chatroom' })
+        let captured: ReceiveEnvelope | null = null
+        await makeForwarder(db, (env) => { captured = env; return Promise.resolve({ code: 1 }) }).drainOnce()
+        expect(captured!.sessionId).toBe('room123@chatroom')
+        expect(captured!.event).toBe('message.new')
+    })
+
+    it('信封带顶层 sender（username/name/avatar），data 不被改动', async () => {
+        enqueue(db, { senderId: 'wxid_a', senderName: '无心', senderAvatar: 'https://av/a.png', rawJson: '{"serverId":"s1","senderUsername":"wxid_a"}' })
+        let captured: ReceiveEnvelope | null = null
+        await makeForwarder(db, (env) => { captured = env; return Promise.resolve({ code: 1 }) }).drainOnce()
+        expect(captured!.sender).toEqual({ username: 'wxid_a', name: '无心', avatar: 'https://av/a.png' })
+        expect(captured!.data).toEqual({ serverId: 's1', senderUsername: 'wxid_a' })
+    })
+
+    it('未解析到身份时 sender.name/avatar 为 null', async () => {
+        enqueue(db, { senderId: 'wxid_x' })
+        let captured: ReceiveEnvelope | null = null
+        await makeForwarder(db, (env) => { captured = env; return Promise.resolve({ code: 1 }) }).drainOnce()
+        expect(captured!.sender).toEqual({ username: 'wxid_x', name: null, avatar: null })
     })
 
     it('duplicate=true 视为成功（done、不再发）', async () => {

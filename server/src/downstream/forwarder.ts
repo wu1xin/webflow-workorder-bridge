@@ -150,7 +150,12 @@ export class Forwarder {
         let result: SendResult
         let ack: ReceiveAck | null = null
         try {
-            ack = await client.receiveMessage({ event: msg.eventType, data })
+            ack = await client.receiveMessage({
+                event: msg.eventType,
+                sessionId: msg.conversationId ?? '',
+                sender: { username: msg.senderId, name: msg.senderName, avatar: msg.senderAvatar },
+                data,
+            })
             result = { type: 'ack', ack }
         } catch (e) {
             result = { type: 'transport', error: e instanceof Error ? e.message : String(e) }
