@@ -46,6 +46,19 @@ export interface MessagesPage {
     hasMore: boolean
 }
 
+/** chatlab members 单项归一：wxid → 名字 + 头像 */
+export interface MemberInfo {
+    name: string | null
+    avatar: string | null
+}
+
+/** fetchMembers 结果：群名/群头像 + 成员映射（wxid→MemberInfo） */
+export interface MembersResult {
+    groupName: string | null
+    groupAvatar: string | null
+    members: Map<string, MemberInfo>
+}
+
 export class WeflowRestClient {
     private readonly cfg: WeflowConfig
     private readonly log?: Logger
@@ -109,6 +122,32 @@ export class WeflowRestClient {
         return {
             messages: Array.isArray(data.messages) ? data.messages : [],
             hasMore: Boolean(data.hasMore),
+        }
+    }
+
+    /**
+     * 取会话成员身份映射（chatlab 模式）。仅解析 meta（群名/群头像）与 members（wxid→名字/头像），
+     * 忽略 chatlab 精简过的 messages（缺关键字段，不可当正文用）。窗口参数须与正文页同窗口，
+     * 保证该页发送人都在 members 里。缺字段一律降级 null / 空映射。fetch→json 顺序依赖，用 async/await。
+     */
+    async fetchMembers(talker: string, start: number, offset: number, limit = 1_000, end?: number): Promise<MembersResult> {
+        const params: Record<string, string | number> = { talker, offset, limit, chatlab: 1 }
+        if (start > 0) params.start = start
+        if (end !== undefined && end > 0) params.end = end
+        const data = await this.getJson('/api/v1/messages', params) as {
+            meta?: { name?: string, groupAvatar?: string }
+            members?: Array<{ platformId?: string, accountName?: string, avatar?: string }>
+        }
+        const members = new Map<string, MemberInfo>()
+        for (const m of Array.isArray(data.members) ? data.members : []) {
+            if (typeof m.platformId === 'string' && m.platformId) {
+                members.set(m.platformId, { name: m.accountName ?? null, avatar: m.avatar ?? null })
+            }
+        }
+        return {
+            groupName: data.meta?.name ?? null,
+            groupAvatar: data.meta?.groupAvatar ?? null,
+            members,
         }
     }
 }
