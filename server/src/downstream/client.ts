@@ -31,6 +31,10 @@ export interface SyncGroupsRequest {
 /** receiveMessage 信封（一期不带 file；file 下期媒体链路补） */
 export interface ReceiveEnvelope {
     event: string
+    /** 消息所属会话/群 ID（xxx@chatroom）；下游据此把消息归到对应群。data 仍为 WeFlow 原文，不含群标识 */
+    sessionId: string
+    /** 发送人身份（信封层补充元数据，非 data 内字段）；name/avatar 未解析到时为 null */
+    sender?: { username: string | null, name: string | null, avatar: string | null }
     data: unknown
 }
 
@@ -101,6 +105,11 @@ export class HttpDownstreamClient implements DownstreamClient {
     async syncGroups(req: SyncGroupsRequest): Promise<{ allowed: string[] }> {
         const token = buildTaskWhiteToken(this.cfg.siteKey, this.cfg.aesKey, this.now())
         const url = `${this.cfg.baseUrl}${SYNC_GROUPS_PATH}?task_white_token=${encodeURIComponent(token)}`
+        // 请求发出前先记一条：便于排查挂起/超时时确认请求确实发出（不打 url，避免泄露 token）
+        this.log?.debug(
+            { path: SYNC_GROUPS_PATH, agentId: req.agentId, platform: req.platform, groups: req.groups.length },
+            '[downstream] syncGroups 发起',
+        )
         const res = await this.fetchImpl(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -120,6 +129,10 @@ export class HttpDownstreamClient implements DownstreamClient {
         }
         const body = await res.json() as AckBody
         if (body.code !== 1) {
+            this.log?.error(
+                { path: SYNC_GROUPS_PATH, code: body.code ?? null, msg: body.msg ?? '' },
+                `[downstream] syncGroups 业务失败：code=${body.code ?? 'none'}`,
+            )
             throw new Error(`下游 syncGroups 失败：code=${body.code ?? 'none'} msg=${body.msg ?? ''}`)
         }
         const allowed = Array.isArray(body.data?.allowed) ? body.data.allowed : []
@@ -132,6 +145,11 @@ export class HttpDownstreamClient implements DownstreamClient {
     async receiveMessage(env: ReceiveEnvelope): Promise<ReceiveAck> {
         const token = buildTaskWhiteToken(this.cfg.siteKey, this.cfg.aesKey, this.now())
         const url = `${this.cfg.baseUrl}${RECEIVE_MESSAGE_PATH}?task_white_token=${encodeURIComponent(token)}`
+        // 请求发出前先记一条：便于排查挂起/超时时确认请求确实发出（不打 url，避免泄露 token）
+        this.log?.debug(
+            { path: RECEIVE_MESSAGE_PATH, event: env.event, sessionId: env.sessionId },
+            '[downstream] receiveMessage 发起',
+        )
         const res = await this.fetchImpl(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -152,7 +170,7 @@ export class HttpDownstreamClient implements DownstreamClient {
             msg?: string
             data?: { retryable?: boolean, message_id?: number | string, duplicate?: boolean, received_at?: number }
         }
-        return {
+        const ack: ReceiveAck = {
             code: body.code ?? 0,
             msg: body.msg,
             retryable: body.data?.retryable,
@@ -160,6 +178,23 @@ export class HttpDownstreamClient implements DownstreamClient {
             duplicate: body.data?.duplicate,
             receivedAt: body.data?.received_at,
         }
+        // code!=1 不抛错（交 forwarder 决策），但仍是需关注信号，故 warn；正常完成打 debug
+        const meta = {
+            path: RECEIVE_MESSAGE_PATH,
+            code: ack.code,
+            duplicate: ack.duplicate ?? false,
+            retryable: ack.retryable ?? false,
+            messageId: ack.messageId ?? null,
+        }
+        if (ack.code === 1) {
+            this.log?.debug(meta, '[downstream] receiveMessage 完成')
+        } else {
+            this.log?.warn(
+                { ...meta, msg: ack.msg ?? '' },
+                `[downstream] receiveMessage 业务未成功：code=${ack.code}`,
+            )
+        }
+        return ack
     }
 
     // 连通性探针：任何传输层异常（网络错/超时/JSON 解析失败）都收敛为 { ok:false, message }，
