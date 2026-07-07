@@ -11,6 +11,8 @@ function sample(over: Partial<EnqueueInput> = {}): EnqueueInput {
         externalId: 'srv-1',
         conversationId: 'alice',
         senderId: 'bob',
+        senderName: null,
+        senderAvatar: null,
         msgTimestamp: 1700000000,
         hasMedia: 0,
         rawJson: '{"a":1}',
@@ -52,6 +54,18 @@ describe('QueueStore', () => {
         store.enqueue(sample({ externalId: 'srv-2' }), 2)
         expect(store.countByStatus('pending')).toBe(2)
         expect(store.countByStatus('dead')).toBe(0)
+    })
+
+    it('入队写入 sender_name/sender_avatar，claimNext 带出 sender 身份', () => {
+        store.enqueue(sample({ senderId: 'wxid_a', senderName: '无心', senderAvatar: 'https://av/a.png' }), 1700000001)
+        const row = db.prepare('SELECT sender_name, sender_avatar FROM queue').get() as { sender_name: string, sender_avatar: string }
+        expect(row.sender_name).toBe('无心')
+        expect(row.sender_avatar).toBe('https://av/a.png')
+
+        const claimed = store.claimNext('weflow:default', 1700000002)
+        expect(claimed?.senderId).toBe('wxid_a')
+        expect(claimed?.senderName).toBe('无心')
+        expect(claimed?.senderAvatar).toBe('https://av/a.png')
     })
 })
 
@@ -192,7 +206,7 @@ describe('QueueStore worker 方法', () => {
     function enq(over: Partial<EnqueueInput> = {}, now = 1000): void {
         store.enqueue({
             channelId: CH, platform: 'weflow', eventType: 'message.new',
-            externalId: 's1', conversationId: 'g@chatroom', senderId: null,
+            externalId: 's1', conversationId: 'g@chatroom', senderId: null, senderName: null, senderAvatar: null,
             msgTimestamp: 100, hasMedia: 0, rawJson: '{"a":1}', mediaJson: null,
             ingestPath: 'catchup', revocableUntil: null, ...over,
         }, now)

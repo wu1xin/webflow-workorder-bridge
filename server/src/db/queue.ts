@@ -19,6 +19,10 @@ export interface EnqueueInput {
     conversationId: string | null
     /** 发送者标识 */
     senderId: string | null
+    /** 发送人昵称（chatlab members.accountName，可空） */
+    senderName: string | null
+    /** 发送人头像 URL（chatlab members.avatar，可空） */
+    senderAvatar: string | null
     /** 消息秒级时间戳 */
     msgTimestamp: number | null
     /** 是否含媒体：1 是 | 0 否 */
@@ -41,6 +45,9 @@ export interface ClaimedMessage {
     msgTimestamp: number | null
     externalId: string | null
     conversationId: string | null
+    senderId: string | null
+    senderName: string | null
+    senderAvatar: string | null
     attempts: number
 }
 
@@ -123,10 +130,12 @@ export class QueueStore {
         this.insertStmt = db.prepare(`
             INSERT INTO queue(
               channel_id, platform, event_type, external_id, conversation_id, sender_id,
+              sender_name, sender_avatar,
               msg_timestamp, has_media, raw_json, media_json, ingest_path, revocable_until,
               status, attempts, created_at, updated_at
             ) VALUES (
               @channelId, @platform, @eventType, @externalId, @conversationId, @senderId,
+              @senderName, @senderAvatar,
               @msgTimestamp, @hasMedia, @rawJson, @mediaJson, @ingestPath, @revocableUntil,
               'pending', 0, @now, @now
             )
@@ -151,7 +160,8 @@ export class QueueStore {
             'UPDATE queue SET revocable_until = NULL WHERE channel_id = ? AND external_id = ?',
         )
         this.pickStmt = db.prepare(`
-            SELECT id, event_type, raw_json, msg_timestamp, external_id, conversation_id, attempts FROM queue
+            SELECT id, event_type, raw_json, msg_timestamp, external_id, conversation_id,
+              sender_id, sender_name, sender_avatar, attempts FROM queue
             WHERE channel_id = @channelId AND status = 'pending' AND has_media = 0
               AND (next_attempt_at IS NULL OR next_attempt_at <= @now)
             ORDER BY id LIMIT 1
@@ -243,11 +253,18 @@ export class QueueStore {
     claimNext(channelId: string, now: number): ClaimedMessage | null {
         return this.db.transaction(() => {
             const row = this.pickStmt.get({ channelId, now }) as {
-                id: number, event_type: string, raw_json: string, msg_timestamp: number | null, external_id: string | null, conversation_id: string | null, attempts: number
+                id: number, event_type: string, raw_json: string, msg_timestamp: number | null,
+                external_id: string | null, conversation_id: string | null,
+                sender_id: string | null, sender_name: string | null, sender_avatar: string | null, attempts: number
             } | undefined
             if (!row) return null
             this.toSendingStmt.run({ id: row.id, now })
-            return { id: row.id, eventType: row.event_type, rawJson: row.raw_json, msgTimestamp: row.msg_timestamp, externalId: row.external_id, conversationId: row.conversation_id, attempts: row.attempts }
+            return {
+                id: row.id, eventType: row.event_type, rawJson: row.raw_json, msgTimestamp: row.msg_timestamp,
+                externalId: row.external_id, conversationId: row.conversation_id,
+                senderId: row.sender_id, senderName: row.sender_name, senderAvatar: row.sender_avatar,
+                attempts: row.attempts,
+            }
         })()
     }
 
