@@ -71,6 +71,13 @@
                     >
                         刷新
                     </ElButton>
+                    <ElButton
+                        type="primary"
+                        :loading="resyncing"
+                        @click="onClickFullResync"
+                    >
+                        强制全量重拉
+                    </ElButton>
                 </div>
             </div>
         </template>
@@ -193,8 +200,9 @@ import { ApiError } from '@/api/http'
 import { ref, computed, onMounted } from 'vue'
 import { fetchGroups } from '@/api/groups'
 import { fetchMessages, fetchMessageDetail, type MessageQuery } from '@/api/messages'
+import { forceFullResync } from '@/api/sync'
 import { type WeflowMessageSummary, type WeflowMessageDetail, type WeflowMessageStatus, type WeflowIngestPath } from '@wb/shared/types'
-import { ElCard, ElTable, ElTableColumn, ElSelect, ElOption, ElButton, ElTag, ElPagination, ElDialog, ElMessage } from 'element-plus'
+import { ElCard, ElTable, ElTableColumn, ElSelect, ElOption, ElButton, ElTag, ElPagination, ElDialog, ElMessage, ElMessageBox } from 'element-plus'
 
 type TagType = 'success' | 'info' | 'warning' | 'danger' | 'primary'
 
@@ -213,6 +221,7 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
+const resyncing = ref(false)
 
 // 筛选项（空串 = 不过滤）
 const conversationId = ref('')
@@ -295,6 +304,28 @@ function onSizeChange(s: number): void {
     pageSize.value = s
     page.value = 1
     load()
+}
+
+/**
+ * 强制全量重拉：二次确认后触发后台全量同步（无视水位、dedup 幂等）。
+ * 后端立即返回、同步在后台跑，故这里只提示已触发，完成后由用户点「刷新」查看。
+ * 取消确认框会 reject（值为 'cancel'），不当错误提示。
+ */
+function onClickFullResync(): void {
+    ElMessageBox.confirm(
+        '将无视同步水位，从头重新拉取所有放行群的全部历史消息（已入库的不会重复入队）。确认继续？',
+        '强制全量重拉',
+        { type: 'warning', confirmButtonText: '开始重拉', cancelButtonText: '取消' },
+    )
+        .then(() => {
+            resyncing.value = true
+            return forceFullResync()
+        })
+        .then(() => ElMessage.success('已触发全量重拉，正在后台拉取，稍后点「刷新」查看'))
+        .catch((e) => {
+            if (e instanceof ApiError) ElMessage.error(e.message)
+        })
+        .finally(() => { resyncing.value = false })
 }
 
 /** 打开详情弹窗并拉单条 */

@@ -29,11 +29,14 @@ describe('decideOutcome', () => {
         expect(decideOutcome(ack(0, false), 0, POLICY).kind).toBe('dead')
         expect(decideOutcome(ack(9999, true), 0, POLICY).kind).toBe('retry')
     })
-    it('传输层错误 → retry（未耗尽）/ dead（耗尽）', () => {
+    it('传输层错误恒定 retry、永不进死信（下游临时不可用不烧死信预算）', () => {
         const o = decideOutcome(transport(), 0, POLICY)
         expect(o).toMatchObject({ kind: 'retry', failCode: null })
         if (o.kind === 'retry') expect(o.lastError).toContain('timeout')
-        expect(decideOutcome(transport(), 2, POLICY).kind).toBe('dead')
+        // attempts 远超 maxAttempts 仍是 retry，退避封顶在 backoffCapMs
+        const o2 = decideOutcome(transport(), 99, POLICY)
+        expect(o2.kind).toBe('retry')
+        if (o2.kind === 'retry') expect(o2.backoffMs).toBe(60000)
     })
     it('退避指数增长且封顶', () => {
         const b = (n: number) => { const o = decideOutcome(ack(0), n, { ...POLICY, maxAttempts: 99 }); return o.kind === 'retry' ? o.backoffMs : -1 }

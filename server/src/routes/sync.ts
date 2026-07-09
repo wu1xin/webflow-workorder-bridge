@@ -1,6 +1,7 @@
 // 同步接口（需求文档 §6 同步）：
 //   - GET  /api/sync/status  同步进度快照
 //   - POST /api/sync         手动触发同步（可选指定起点时间戳 since），防并发
+//   - POST /api/sync/full    强制全量重拉（无视水位，从头拉全部历史），防并发
 import type { FastifyInstance } from 'fastify'
 import type { SyncProgress } from '../sync/types.js'
 import type { AppContext } from './context.js'
@@ -8,6 +9,15 @@ import type { AppContext } from './context.js'
 export function registerSyncRoutes(app: FastifyInstance, ctx: AppContext): void {
     app.get('/api/sync/status', async (): Promise<SyncProgress> => {
         return ctx.sync.getStatus()
+    })
+
+    app.post('/api/sync/full', async (_req, reply) => {
+        const { accepted, status } = ctx.sync.triggerFullSync()
+        if (!accepted) {
+            // 已有同步在进行：防并发，返回 409 + 当前进度
+            return reply.code(409).send({ error: '已有同步在进行中', status })
+        }
+        return { accepted, status }
     })
 
     app.post<{ Body: { since?: number } }>('/api/sync', async (req, reply) => {

@@ -97,8 +97,8 @@ kick()/兜底 tick → 循环：
                │       （attempts≥maxAttempts → markDead + 告警 dlq_new）
                ├─ code!=1 不可重试
                │     → markDead + 告警 dlq_new
-               └─ 传输层错误（超时/非200/JSON解析失败）
-                     → 视为可重试，同 markRetry（并计熔断连续失败）
+               └─ 传输层错误（超时/非200/响应JSON解析失败）
+                     → 恒定 markRetry：不受 maxAttempts 约束、永不进死信（并计熔断连续失败）
 ```
 
 **要点**：
@@ -119,7 +119,7 @@ kick()/兜底 tick → 循环：
 
 ## 6. ACK 判定、错误码映射、退避、熔断
 
-**ACK 判定（铁律，契约 §2.4）**：成功 = `HTTP 200 且 body.code===1`。**绝不用 HTTP 状态码判成败**；非 200 / 网络错 / JSON 解析失败一律归**传输层瞬时错误 → 可重试退避**。
+**ACK 判定（铁律，契约 §2.4）**：成功 = `HTTP 200 且 body.code===1`。**绝不用 HTTP 状态码判成败**；非 200 / 网络错 / 响应 JSON 解析失败一律归**传输层瞬时错误 → 恒定退避重试、永不进死信**（靠熔断 + 队列 pending 积压兜底）。
 
 **错误码 → 动作**（照搬契约 §2.6 / 设计文档 §11）：
 
@@ -136,7 +136,7 @@ kick()/兜底 tick → 循环：
 
 **决策优先级**：先认响应 `data.retryable`（下游显式给出以它为准）；没给则查上表。
 
-**退避**：指数 + 上限 + 抖动，`next_attempt_at = now + min(base·2^(attempts-1), cap) + jitter`（默认 base=2s、cap=60s、maxAttempts=3）。可重试耗尽 → dead；不可重试 → 立即 dead（不耗重试次数）。`1001` 单独计有限重试 2 次。
+**退避**：指数 + 上限 + 抖动，`next_attempt_at = now + min(base·2^(attempts-1), cap) + jitter`（默认 base=2s、cap=60s、maxAttempts=3）。**业务可重试码**耗尽 → dead；不可重试 → 立即 dead（不耗重试次数）。**传输层错误不受 maxAttempts 约束、恒定退避重试、永不进死信**（下游未启动/重启/网络抖动属基础设施临时不可用，靠熔断节流 + 队列 pending 积压兜底；下游长期不可用经由 `queueBacklog`/`circuitState` 监控发现，而非 `dlqCount`）。`1001` 单独计有限重试 2 次。
 
 **熔断（轻量版）**：仅针对**下游不可用类**失败（传输错误 + `0/1004/1005`）计连续失败数；≥阈值（默认 5）→ 打开熔断，worker 暂停冷却期（默认 30s）+ 告警 `downstream_circuit_open`；冷却后半开试一条，成功则关闭复位，失败则延长冷却。**内容类错误（`1001/1002/1003`）不触发熔断**（逐条死信的事）。
 

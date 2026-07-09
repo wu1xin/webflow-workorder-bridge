@@ -22,6 +22,7 @@ onMounted(() => {
 .config_page {
     display: flex;
     flex-wrap: wrap;
+    gap: 12px;
     > .el-card {
         flex: 1;
         max-width: 500px;

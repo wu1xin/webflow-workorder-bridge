@@ -80,7 +80,7 @@ describe('HttpDownstreamClient.receiveMessage', () => {
             ok: true,
             json: () => Promise.resolve({ code: 1002, msg: '缺参', data: { retryable: false } }),
         })) as unknown as typeof fetch
-        const ack = await clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: { rawid: '1' } })
+        const ack = await clientWith(fetchImpl).receiveMessage({ event: 'message.new', sessionId: 'g@chatroom', data: { rawid: '1' } })
         expect(ack.code).toBe(1002)
         expect(ack.retryable).toBe(false)
     })
@@ -90,7 +90,7 @@ describe('HttpDownstreamClient.receiveMessage', () => {
             ok: true,
             json: () => Promise.resolve({ code: 1, data: { message_id: 9, duplicate: true, received_at: 1750000001 } }),
         })) as unknown as typeof fetch
-        const ack = await clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: {} })
+        const ack = await clientWith(fetchImpl).receiveMessage({ event: 'message.new', sessionId: 'g@chatroom', data: {} })
         expect(ack).toMatchObject({ code: 1, duplicate: true, messageId: 9, receivedAt: 1750000001 })
     })
 
@@ -100,7 +100,7 @@ describe('HttpDownstreamClient.receiveMessage', () => {
             ok: false, status: 502, text: () => Promise.resolve('bad gateway'),
         })) as unknown as typeof fetch
         try {
-            await clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: {} })
+            await clientWith(fetchImpl).receiveMessage({ event: 'message.new', sessionId: 'g@chatroom', data: {} })
         }
         catch (e) {
             expect((e as Error).message).toMatch(/502/)
@@ -108,16 +108,17 @@ describe('HttpDownstreamClient.receiveMessage', () => {
         }
     })
 
-    it('URL 带 receiveMessage 端点与 task_white_token，body 为 {event,data} 信封', async () => {
+    it('URL 带 receiveMessage 端点与 task_white_token，body 为 {event,sessionId,data} 信封', async () => {
         let captured: { url: string, body: string } | null = null
         const fetchImpl = ((url: string, init: { body: string }) => {
             captured = { url, body: init.body }
             return Promise.resolve({ ok: true, json: () => Promise.resolve({ code: 1, data: {} }) })
         }) as unknown as typeof fetch
-        await clientWith(fetchImpl).receiveMessage({ event: 'message.new', data: { rawid: '1' } })
+        await clientWith(fetchImpl).receiveMessage({ event: 'message.new', sessionId: 'g@chatroom', data: { rawid: '1' } })
         expect(captured!.url).toContain('/extra_server/weflow/receiveMessage?task_white_token=')
         const body = JSON.parse(captured!.body)
         expect(body.event).toBe('message.new')
+        expect(body.sessionId).toBe('g@chatroom')
         expect(body.data.rawid).toBe('1')
         expect(body.file).toBeUndefined()
     })

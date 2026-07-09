@@ -74,19 +74,20 @@ describe('Forwarder.drainOnce', () => {
         expect(db.audit.stats(WEFLOW_CHANNEL_ID)).toEqual({ totalSuccess: 0, totalFail: 1 })
     })
 
-    it('传输层错误致死也计入失败统计（code=0）', async () => {
+    it('传输层错误反复失败仍 retry、永不进死信（attempts 累加、留 pending、不写审计）', async () => {
         enqueue(db)
-        // maxAttempts 默认 3；attemptsSoFar 需达 2 才 dead。先手动把 attempts 抬到 2：两次 retry。
         const fw = makeForwarder(db, () => Promise.reject(new Error('boom')))
-        await fw.drainOnce() // attempt1 → retry (next_attempt_at 未来)
-        // 手动清退避让其可再取
         const id = db.queue.list(WEFLOW_CHANNEL_ID, { status: 'pending' }, 10, 0).items[0].id
-        db.raw.prepare('UPDATE queue SET next_attempt_at = NULL WHERE id = ?').run(id)
-        await fw.drainOnce() // attempt2 → retry
-        db.raw.prepare('UPDATE queue SET next_attempt_at = NULL WHERE id = ?').run(id)
-        await fw.drainOnce() // attempt3 → dead
-        expect(db.queue.countByStatus('dead')).toBe(1)
-        expect(db.audit.stats(WEFLOW_CHANNEL_ID)).toEqual({ totalSuccess: 0, totalFail: 1 })
+        // 连投 4 次（远超 maxAttempts=3），每次清退避让其可再取；旧逻辑此时早已 dead
+        for (let i = 0; i < 4; i++) {
+            await fw.drainOnce()
+            db.raw.prepare('UPDATE queue SET next_attempt_at = NULL WHERE id = ?').run(id)
+        }
+        expect(db.queue.countByStatus('dead')).toBe(0)
+        expect(db.queue.countByStatus('pending')).toBe(1)
+        expect(db.queue.getById(WEFLOW_CHANNEL_ID, id)?.attempts).toBe(4)
+        // 未进终态（done/dead），故不写审计
+        expect(db.audit.stats(WEFLOW_CHANNEL_ID)).toEqual({ totalSuccess: 0, totalFail: 0 })
     })
 
     it('code=0 可重试 → 回 pending 且 attempts+1', async () => {

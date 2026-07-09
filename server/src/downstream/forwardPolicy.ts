@@ -41,7 +41,8 @@ export function decideOutcome(result: SendResult, attemptsSoFar: number, p: Retr
             ? { kind: 'dead', failCode, lastError: reason }
             : { kind: 'retry', failCode, lastError: reason, backoffMs: backoffMs(next, p) }
 
-    if (result.type === 'transport') return retryOrDead(p.maxAttempts, null, `传输错误：${result.error}`)
+    // 传输层错误（下游未启动/重启/网络抖动）属基础设施临时不可用：恒定退避重试、永不进死信，靠熔断与队列积压兜底
+    if (result.type === 'transport') return { kind: 'retry', failCode: null, lastError: `传输错误：${result.error}`, backoffMs: backoffMs(next, p) }
 
     const { code, retryable, msg } = result.ack
     const reason = `code=${code}${msg ? ` msg=${msg}` : ''}`
