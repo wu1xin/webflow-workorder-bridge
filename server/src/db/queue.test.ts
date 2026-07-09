@@ -221,6 +221,31 @@ describe('QueueStore worker 方法', () => {
         expect(store.countByStatus('pending')).toBe(1)
     })
 
+    it('claimNext(includeMedia=true) 也取媒体行，按 id 取最早', () => {
+        enq({ externalId: 'm1', hasMedia: 1 })
+        enq({ externalId: 't1', hasMedia: 0 })
+        const c = store.claimNext(CH, 2000, true)
+        expect(c?.externalId).toBe('m1')
+        expect(c?.hasMedia).toBe(1)
+    })
+
+    it('claimNext 带出 hasMedia 标记', () => {
+        enq({ externalId: 't1', hasMedia: 0 })
+        expect(store.claimNext(CH, 2000)?.hasMedia).toBe(0)
+    })
+
+    it('markMediaWait：回 pending、置 next_attempt_at，但 attempts 不变（等落盘不吃重试预算）', () => {
+        enq({ externalId: 'm1', hasMedia: 1 })
+        const c = store.claimNext(CH, 2000, true)!
+        store.markMediaWait(c.id, 2005, 2000)
+        const d = store.getById(CH, c.id)!
+        expect(d.status).toBe('pending')
+        expect(d.attempts).toBe(0) // 关键：未累加
+        // 未到期不取、到期再取
+        expect(store.claimNext(CH, 2003, true)).toBeNull()
+        expect(store.claimNext(CH, 2005, true)?.externalId).toBe('m1')
+    })
+
     it('claimNext 跳过未到期（next_attempt_at>now）的行', () => {
         enq({ externalId: 't1' })
         const c1 = store.claimNext(CH, 2000)!

@@ -7,6 +7,9 @@ import type { Logger } from '../weflow/logger.js'
 /** 出站请求超时（毫秒） */
 const TIMEOUT_MS = 30_000
 
+/** 媒体上传超时（毫秒）：大文件耗时更长，放大到 120s */
+const UPLOAD_TIMEOUT_MS = 120_000
+
 /** syncGroups 端点路径（不含 query；错误信息只带它，避免泄露含 task_white_token 的完整 URL） */
 const SYNC_GROUPS_PATH = '/extra_server/weflow/syncGroups'
 
@@ -15,6 +18,9 @@ const RECEIVE_MESSAGE_PATH = '/extra_server/weflow/receiveMessage'
 
 /** ping 端点路径 */
 const PING_PATH = '/extra_server/weflow/ping'
+
+/** uploadMedia 端点路径（错误信息只带它，避免泄露含 token 的完整 URL） */
+const UPLOAD_MEDIA_PATH = '/extra_server/weflow/uploadMedia'
 
 /** syncGroups 请求体（群快照，全量或单群增量同结构） */
 export interface SyncGroupsRequest {
@@ -28,7 +34,13 @@ export interface SyncGroupsRequest {
     }>
 }
 
-/** receiveMessage 信封（一期不带 file；file 下期媒体链路补） */
+/** 媒体引用（信封顶层 file）：引用 uploadMedia 换来的 file_id；url 可带可不带（下游以 file_id 为准） */
+export interface FileRef {
+    file_id: string
+    url?: string
+}
+
+/** receiveMessage 信封（媒体消息带顶层 file 引用 uploadMedia 的 file_id，见对接文档 §8） */
 export interface ReceiveEnvelope {
     event: string
     /** 消息所属会话/群 ID（xxx@chatroom）；下游据此把消息归到对应群。data 仍为 WeFlow 原文，不含群标识 */
@@ -36,6 +48,32 @@ export interface ReceiveEnvelope {
     /** 发送人身份（信封层补充元数据，非 data 内字段）；name/avatar 未解析到时为 null */
     sender?: { username: string | null, name: string | null, avatar: string | null }
     data: unknown
+    /** 媒体引用（本期单对象；非媒体/降级时不带）。下游只校验 file_id 存在性 */
+    file?: FileRef
+}
+
+/** uploadMedia 请求：媒体二进制 + 幂等/命名字段 */
+export interface UploadMediaRequest {
+    /** 文件字节 */
+    bytes: Buffer | Uint8Array
+    /** 媒体文件名（含扩展名，供下游安全校验/落地命名 + 幂等键） */
+    fileName: string
+    /** 去重键（消息 serverId，回退 localId），幂等键组成之一 */
+    rawid: string
+    /** WeFlow 媒体类型标识（image/voice/emoji/file），仅元数据留存 */
+    mediaType?: string
+}
+
+/** uploadMedia 解析后的 ACK（code!=1 不抛错，交 forwarder 决策） */
+export interface UploadAck {
+    code: number
+    msg?: string
+    retryable?: boolean
+    fileId?: string
+    url?: string
+    size?: number
+    mime?: string
+    duplicate?: boolean
 }
 
 /** receiveMessage 解析后的 ACK（code!=1 不抛错，交 forwarder 决策） */
@@ -60,6 +98,7 @@ export interface PingResult {
 export interface DownstreamClient {
     syncGroups(req: SyncGroupsRequest): Promise<{ allowed: string[] }>
     receiveMessage(env: ReceiveEnvelope): Promise<ReceiveAck>
+    uploadMedia(req: UploadMediaRequest): Promise<UploadAck>
     ping(): Promise<PingResult>
 }
 
@@ -194,6 +233,57 @@ export class HttpDownstreamClient implements DownstreamClient {
                 `[downstream] receiveMessage 业务未成功：code=${ack.code}`,
             )
         }
+        return ack
+    }
+
+    // 媒体上传：multipart/form-data 传二进制。与 receiveMessage 同款成败判定——
+    // 仅传输层失败（非 2xx / 网络错 / JSON 解析失败）抛错，业务 code!=1 原样返回交 forwarder 决策。
+    // Content-Type 由 FormData 自动生成含 boundary，切勿手设。fetch→json 顺序依赖，用 async/await。
+    async uploadMedia(req: UploadMediaRequest): Promise<UploadAck> {
+        const token = buildTaskWhiteToken(this.cfg.siteKey, this.cfg.aesKey, this.now())
+        const url = `${this.cfg.baseUrl}${UPLOAD_MEDIA_PATH}?task_white_token=${encodeURIComponent(token)}`
+        const form = new FormData()
+        // new Uint8Array(bytes) 归一到 ArrayBuffer 支撑（Buffer 的 ArrayBufferLike 与 Blob 期望的 ArrayBuffer 型变冲突）
+        form.append('file', new Blob([new Uint8Array(req.bytes)]), req.fileName)
+        form.append('rawid', req.rawid)
+        form.append('mediaFileName', req.fileName)
+        if (req.mediaType) form.append('mediaType', req.mediaType)
+        this.log?.debug(
+            { path: UPLOAD_MEDIA_PATH, rawid: req.rawid, fileName: req.fileName, mediaType: req.mediaType ?? null },
+            '[downstream] uploadMedia 发起',
+        )
+        const res = await this.fetchImpl(url, {
+            method: 'POST',
+            body: form,
+            signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+        })
+        if (!res.ok) {
+            const text = await res.text().catch(() => '')
+            const snippet = text.slice(0, 500)
+            this.log?.error(
+                { path: UPLOAD_MEDIA_PATH, status: res.status, body: snippet },
+                `[downstream] uploadMedia 返回 HTTP ${res.status}`,
+            )
+            throw new Error(`下游 ${UPLOAD_MEDIA_PATH} 返回 HTTP ${res.status}${snippet ? `：${snippet}` : ''}`)
+        }
+        const body = await res.json() as {
+            code?: number
+            msg?: string
+            data?: { file_id?: string, url?: string, size?: number, mime?: string, duplicate?: boolean, retryable?: boolean }
+        }
+        const ack: UploadAck = {
+            code: body.code ?? 0,
+            msg: body.msg,
+            retryable: body.data?.retryable,
+            fileId: body.data?.file_id,
+            url: body.data?.url,
+            size: body.data?.size,
+            mime: body.data?.mime,
+            duplicate: body.data?.duplicate,
+        }
+        const meta = { path: UPLOAD_MEDIA_PATH, code: ack.code, fileId: ack.fileId ?? null, duplicate: ack.duplicate ?? false }
+        if (ack.code === 1) this.log?.debug(meta, '[downstream] uploadMedia 完成')
+        else this.log?.warn({ ...meta, msg: ack.msg ?? '' }, `[downstream] uploadMedia 业务未成功：code=${ack.code}`)
         return ack
     }
 

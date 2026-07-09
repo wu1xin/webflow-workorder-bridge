@@ -136,6 +136,16 @@
                     </template>
                 </ElInputNumber>
             </ElFormItem>
+            <ElFormItem
+                label="文件媒体目录"
+                prop="fileBaseDir"
+            >
+                <ElInput
+                    v-model="weflowForm.model.fileBaseDir"
+                    placeholder="如 C:\Users\<用户>\Documents\xwechat_files\<wxid>\msg\file（留空则文件类媒体降级）"
+                    clearable
+                />
+            </ElFormItem>
         </ElForm>
         <template #footer>
             <ElButton
@@ -201,6 +211,7 @@ const weflowForm = ref({
         firstMessageTimeoutSec: 0,
         reconnectIntervalSec: 0,
         reconnectLogIntervalSec: 0,
+        fileBaseDir: '',
     } as WeflowConfig,
     rules: {
         host: [{
@@ -266,6 +277,7 @@ watch(
             weflowForm.value.model.firstMessageTimeoutSec = newWeflowConfig.firstMessageTimeoutSec
             weflowForm.value.model.reconnectIntervalSec = newWeflowConfig.reconnectIntervalSec
             weflowForm.value.model.reconnectLogIntervalSec = newWeflowConfig.reconnectLogIntervalSec
+            weflowForm.value.model.fileBaseDir = newWeflowConfig.fileBaseDir ?? ''
         }
     },
     { immediate: true }, 
@@ -282,6 +294,7 @@ function buildUpdate(): WeflowConfigUpdate {
         firstMessageTimeoutSec: weflowForm.value.model.firstMessageTimeoutSec,
         reconnectIntervalSec: weflowForm.value.model.reconnectIntervalSec,
         reconnectLogIntervalSec: weflowForm.value.model.reconnectLogIntervalSec,
+        fileBaseDir: weflowForm.value.model.fileBaseDir?.trim() || undefined,
     }
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateDownstreamUpdate } from './validate.js'
+import { validateDownstreamUpdate, validateWeflowUpdate } from './validate.js'
 
 describe('validateDownstreamUpdate', () => {
     const ok = { baseUrl: 'https://dn.example.com', siteKey: 'site', aesKey: 'sixteen-byte-key' }
@@ -26,5 +26,31 @@ describe('validateDownstreamUpdate', () => {
     })
     it('forwarder 合法值通过', () => {
         expect(validateDownstreamUpdate({ ...ok, forwarder: { maxAttempts: 3, backoffBaseMs: 2000, backoffCapMs: 60000 } }).ok).toBe(true)
+    })
+    it('forwarder.mediaEnabled 非布尔 → 报错', () => {
+        expect(validateDownstreamUpdate({ ...ok, forwarder: { mediaEnabled: 'yes' as unknown as boolean } }).errors['forwarder.mediaEnabled']).toBeTruthy()
+    })
+    it('forwarder.mediaEnabled 布尔通过；mediaWaitCapSec 合法通过', () => {
+        expect(validateDownstreamUpdate({ ...ok, forwarder: { mediaEnabled: true, mediaWaitCapSec: 300 } }).ok).toBe(true)
+    })
+    it('forwarder.mediaWaitCapSec 越界 → 报错', () => {
+        expect(validateDownstreamUpdate({ ...ok, forwarder: { mediaWaitCapSec: 10 } }).errors['forwarder.mediaWaitCapSec']).toBeTruthy()
+    })
+})
+
+describe('validateWeflowUpdate — fileBaseDir', () => {
+    const ok = {
+        host: '127.0.0.1', port: 5031, accessToken: 'tok',
+        connectTimeoutSec: 10, readTimeoutSec: 60, firstMessageTimeoutSec: 10,
+        reconnectIntervalSec: 1, reconnectLogIntervalSec: 30,
+    }
+    it('不带 fileBaseDir 通过（可选）', () => {
+        expect(validateWeflowUpdate(ok).ok).toBe(true)
+    })
+    it('fileBaseDir 为非空字符串通过', () => {
+        expect(validateWeflowUpdate({ ...ok, fileBaseDir: 'C:\\x\\msg\\file' }).ok).toBe(true)
+    })
+    it('fileBaseDir 为空白字符串 → 报错', () => {
+        expect(validateWeflowUpdate({ ...ok, fileBaseDir: '   ' }).errors.fileBaseDir).toBeTruthy()
     })
 })

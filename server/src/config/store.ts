@@ -92,6 +92,8 @@ export class ConfigStore {
                 firstMessageTimeoutSec: update.firstMessageTimeoutSec,
                 reconnectIntervalSec: update.reconnectIntervalSec,
                 reconnectLogIntervalSec: update.reconnectLogIntervalSec,
+                // fileBaseDir 可选：给了才落库（trim），未给保持 undefined（未配置态）
+                ...(update.fileBaseDir?.trim() ? { fileBaseDir: update.fileBaseDir.trim() } : {}),
             },
             downstream: this.config.downstream,
         }

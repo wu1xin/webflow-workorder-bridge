@@ -26,6 +26,11 @@ export interface WeflowConfig {
     reconnectIntervalSec: number
     /** 重连测试日志的汇总周期（秒）：每段记录该时间内的测试次数与过程，默认 30 */
     reconnectLogIntervalSec: number
+    /**
+   * 文件类媒体的本地根目录（微信 `xwechat_files\<登录wxid>\msg\file`）。
+   * 文件消息二进制从此目录按 `YYYY-MM\<文件名>` 定位；未配置则文件类媒体降级为纯文本占位。
+   */
+    fileBaseDir?: string
 }
 
 /**
@@ -39,6 +44,10 @@ export interface DownstreamForwarderConfig {
     maxAttempts?: number
     backoffBaseMs?: number
     backoffCapMs?: number
+    /** 媒体链路灰度总闸：是否消费 has_media=1 的媒体消息（缺省 false，下游 file 通了再置 true） */
+    mediaEnabled?: boolean
+    /** 媒体等落盘墙钟上限（秒，缺省 300）：超时仍拿不到文件则降级发纯文本占位 */
+    mediaWaitCapSec?: number
 }
 
 /** 下游 work-order-system 接入配置（出站调用用；密钥线下交付，明文落盘） */

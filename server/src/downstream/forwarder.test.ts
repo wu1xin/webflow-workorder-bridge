@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { Db } from '../db/database.js'
 import { Forwarder } from './forwarder.js'
-import type { DownstreamClient, ReceiveAck, ReceiveEnvelope } from './client.js'
+import type { DownstreamClient, ReceiveAck, ReceiveEnvelope, UploadAck, UploadMediaRequest } from './client.js'
 import type { EnqueueInput } from '../db/queue.js'
 import { WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM } from '../weflow/adapter.js'
 
 const noopLog = { info() {}, warn() {}, error() {}, debug() {} } as never
 const CFG = { baseUrl: 'https://dn', siteKey: 'k', aesKey: 'sixteen-byte-key' }
+const uploadOk: (req: UploadMediaRequest) => Promise<UploadAck> = () => Promise.resolve({ code: 1, fileId: 'att', url: 'u' })
 
 function enqueue(db: Db, over: Partial<EnqueueInput> = {}, now = 1000) {
     db.queue.enqueue({
@@ -18,8 +22,8 @@ function enqueue(db: Db, over: Partial<EnqueueInput> = {}, now = 1000) {
 }
 
 function makeForwarder(db: Db, receive: (env: ReceiveEnvelope) => Promise<ReceiveAck>, alert = { send() {} }) {
-    const client: DownstreamClient = { syncGroups: () => Promise.resolve({ allowed: [] }), receiveMessage: receive, ping: () => Promise.resolve({ ok: true }) }
-    const store = { getDownstream: () => CFG } as never
+    const client: DownstreamClient = { syncGroups: () => Promise.resolve({ allowed: [] }), receiveMessage: receive, uploadMedia: uploadOk, ping: () => Promise.resolve({ ok: true }) }
+    const store = { getDownstream: () => CFG, getWeflow: () => undefined } as never
     return new Forwarder({ db, store, log: noopLog, alert, createClient: () => client, now: () => 2000 })
 }
 
@@ -124,8 +128,8 @@ describe('Forwarder.drainOnce', () => {
 
     it('未配置下游 → 空转不报错', async () => {
         enqueue(db)
-        const client: DownstreamClient = { syncGroups: () => Promise.resolve({ allowed: [] }), receiveMessage: () => Promise.reject(new Error('should not call')), ping: () => Promise.resolve({ ok: true }) }
-        const fw = new Forwarder({ db, store: { getDownstream: () => undefined } as never, log: noopLog, alert: { send() {} }, createClient: () => client, now: () => 2000 })
+        const client: DownstreamClient = { syncGroups: () => Promise.resolve({ allowed: [] }), receiveMessage: () => Promise.reject(new Error('should not call')), uploadMedia: uploadOk, ping: () => Promise.resolve({ ok: true }) }
+        const fw = new Forwarder({ db, store: { getDownstream: () => undefined, getWeflow: () => undefined } as never, log: noopLog, alert: { send() {} }, createClient: () => client, now: () => 2000 })
         await fw.drainOnce()
         expect(db.queue.countByStatus('pending')).toBe(1)
     })
@@ -163,6 +167,130 @@ describe('Forwarder.drainOnce', () => {
         fw.setEnabled(false)
         await fw.drainOnce()
         expect(db.queue.countByStatus('pending')).toBe(2) // enabled=false，循环首行 return，不取件
+    })
+})
+
+describe('Forwarder 媒体分支', () => {
+    let db: Db
+    let dir: string
+    beforeEach(() => { db = Db.openMemory(); dir = mkdtempSync(join(tmpdir(), 'fwm-')) })
+    afterEach(() => { db.close(); rmSync(dir, { recursive: true, force: true }) })
+
+    // 媒体转发器：可注入 receiveMessage/uploadMedia/告警/fileBaseDir/等落盘上限；mediaEnabled 默认开
+    function mediaForwarder(opts: {
+        receive?: (e: ReceiveEnvelope) => Promise<ReceiveAck>
+        upload?: (r: UploadMediaRequest) => Promise<UploadAck>
+        alert?: { send: (a: { type: string }) => void }
+        fileBaseDir?: string
+        mediaWaitCapSec?: number
+    } = {}) {
+        const client: DownstreamClient = {
+            syncGroups: () => Promise.resolve({ allowed: [] }),
+            receiveMessage: opts.receive ?? (() => Promise.resolve({ code: 1 })),
+            uploadMedia: opts.upload ?? uploadOk,
+            ping: () => Promise.resolve({ ok: true }),
+        }
+        const cfg = { ...CFG, forwarder: { mediaEnabled: true, mediaWaitCapSec: opts.mediaWaitCapSec ?? 300 } }
+        const store = { getDownstream: () => cfg, getWeflow: () => (opts.fileBaseDir ? { fileBaseDir: opts.fileBaseDir } : undefined) } as never
+        return new Forwarder({ db, store, log: noopLog, alert: opts.alert ?? { send() {} }, createClient: () => client, now: () => 2000 })
+    }
+
+    // 就绪图片：写入本地文件 + rawJson 带 mediaLocalPath
+    function enqueueReadyImage(now = 1999) {
+        const p = join(dir, 'a.jpg')
+        writeFileSync(p, 'imgbytes12345') // 13 字节
+        const rawJson = JSON.stringify({ localType: 3, serverId: 's1', mediaFileName: 'a.jpg', mediaLocalPath: p, createTime: 100, senderUsername: 'wxid_a', content: '[图片]' })
+        enqueue(db, { hasMedia: 1, externalId: 's1', rawJson, msgTimestamp: 100 }, now)
+    }
+
+    it('就绪 → uploadMedia 换 file_id → receiveMessage 带 file → done + 审计(isMedia=1,fileId)', async () => {
+        enqueueReadyImage()
+        let env: ReceiveEnvelope | null = null
+        let up: UploadMediaRequest | null = null
+        await mediaForwarder({
+            receive: (e) => { env = e; return Promise.resolve({ code: 1 }) },
+            upload: (r) => { up = r; return Promise.resolve({ code: 1, fileId: 'att_1', url: 'https://oss/a.jpg' }) },
+        }).drainOnce()
+        expect(up!.rawid).toBe('s1')
+        expect(up!.fileName).toBe('a.jpg')
+        expect(up!.mediaType).toBe('image')
+        expect(up!.bytes.byteLength).toBe(13)
+        expect(env!.file).toEqual({ file_id: 'att_1', url: 'https://oss/a.jpg' })
+        expect(db.queue.countByStatus('done')).toBe(1)
+        const row = db.raw.prepare('SELECT is_media, file_id FROM audit').get() as { is_media: number, file_id: string }
+        expect(row).toEqual({ is_media: 1, file_id: 'att_1' })
+    })
+
+    it('等落盘（未超墙钟）→ markMediaWait：不发下游、留 pending、attempts 不变', async () => {
+        // 图片但 mediaLocalPath 字段缺失 → waiting；created_at 1990，仅等 10s < cap
+        const rawJson = JSON.stringify({ localType: 3, serverId: 's1', content: '[图片]' })
+        enqueue(db, { hasMedia: 1, externalId: 's1', rawJson, msgTimestamp: 100 }, 1990)
+        let receiveCalls = 0, uploadCalls = 0
+        await mediaForwarder({
+            receive: () => { receiveCalls++; return Promise.resolve({ code: 1 }) },
+            upload: () => { uploadCalls++; return uploadOk({} as UploadMediaRequest) },
+        }).drainOnce()
+        expect(receiveCalls).toBe(0)
+        expect(uploadCalls).toBe(0)
+        expect(db.queue.countByStatus('pending')).toBe(1)
+        expect(db.queue.getById(WEFLOW_CHANNEL_ID, 1)?.attempts).toBe(0)
+    })
+
+    it('等落盘超墙钟上限 → 降级发纯文本(无 file) → done + media_downgrade 告警', async () => {
+        const rawJson = JSON.stringify({ localType: 3, serverId: 's1', content: '[图片]' })
+        enqueue(db, { hasMedia: 1, externalId: 's1', rawJson, msgTimestamp: 100 }, 1000) // 等 1000s > cap 300
+        let env: ReceiveEnvelope | null = null
+        const alerts: string[] = []
+        await mediaForwarder({
+            receive: (e) => { env = e; return Promise.resolve({ code: 1 }) },
+            alert: { send: a => alerts.push(a.type) },
+        }).drainOnce()
+        expect(env!.file).toBeUndefined()
+        expect(db.queue.countByStatus('done')).toBe(1)
+        expect(alerts).toContain('media_downgrade')
+    })
+
+    it('视频(不支持) → 降级发纯文本 → done + 告警', async () => {
+        const rawJson = JSON.stringify({ localType: 43, serverId: 's1', content: '[视频]' })
+        enqueue(db, { hasMedia: 1, externalId: 's1', rawJson, msgTimestamp: 100 }, 1999)
+        let env: ReceiveEnvelope | null = null
+        const alerts: string[] = []
+        let uploadCalls = 0
+        await mediaForwarder({
+            receive: (e) => { env = e; return Promise.resolve({ code: 1 }) },
+            upload: () => { uploadCalls++; return uploadOk({} as UploadMediaRequest) },
+            alert: { send: a => alerts.push(a.type) },
+        }).drainOnce()
+        expect(uploadCalls).toBe(0)
+        expect(env!.file).toBeUndefined()
+        expect(db.queue.countByStatus('done')).toBe(1)
+        expect(alerts).toContain('media_downgrade')
+    })
+
+    it('upload 返回 1002 → 降级发纯文本 → done + 告警', async () => {
+        enqueueReadyImage()
+        let env: ReceiveEnvelope | null = null
+        const alerts: string[] = []
+        await mediaForwarder({
+            receive: (e) => { env = e; return Promise.resolve({ code: 1 }) },
+            upload: () => Promise.resolve({ code: 1002, msg: '类型不允许', retryable: false }),
+            alert: { send: a => alerts.push(a.type) },
+        }).drainOnce()
+        expect(env!.file).toBeUndefined()
+        expect(db.queue.countByStatus('done')).toBe(1)
+        expect(alerts).toContain('media_downgrade')
+    })
+
+    it('upload 返回 1004（可重试）→ 退避重试、不发 receiveMessage、attempts+1', async () => {
+        enqueueReadyImage()
+        let receiveCalls = 0
+        await mediaForwarder({
+            receive: () => { receiveCalls++; return Promise.resolve({ code: 1 }) },
+            upload: () => Promise.resolve({ code: 1004, retryable: true }),
+        }).drainOnce()
+        expect(receiveCalls).toBe(0)
+        expect(db.queue.countByStatus('pending')).toBe(1)
+        expect(db.queue.getById(WEFLOW_CHANNEL_ID, 1)?.attempts).toBe(1)
     })
 })
 

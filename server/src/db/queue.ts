@@ -48,6 +48,10 @@ export interface ClaimedMessage {
     senderId: string | null
     senderName: string | null
     senderAvatar: string | null
+    /** 是否含媒体：1 是 | 0 否（forwarder 据此分叉媒体分支） */
+    hasMedia: 0 | 1
+    /** 入队时间（秒）：媒体「等落盘」墙钟上限以它为锚点 */
+    createdAt: number
     attempts: number
 }
 
@@ -118,9 +122,11 @@ export class QueueStore {
     private readonly listWatchesStmt: BetterSqlite3.Statement
     private readonly clearWatchStmt: BetterSqlite3.Statement
     private readonly pickStmt: BetterSqlite3.Statement
+    private readonly pickAnyStmt: BetterSqlite3.Statement
     private readonly toSendingStmt: BetterSqlite3.Statement
     private readonly doneStmt: BetterSqlite3.Statement
     private readonly retryStmt: BetterSqlite3.Statement
+    private readonly mediaWaitStmt: BetterSqlite3.Statement
     private readonly deadStmt: BetterSqlite3.Statement
     private readonly resetStuckStmt: BetterSqlite3.Statement
     private readonly retryDeadStmt: BetterSqlite3.Statement
@@ -159,10 +165,19 @@ export class QueueStore {
         this.clearWatchStmt = db.prepare(
             'UPDATE queue SET revocable_until = NULL WHERE channel_id = ? AND external_id = ?',
         )
+        // 取件列：文本(pickStmt, has_media=0) 与 全量(pickAnyStmt, 含媒体) 仅差媒体过滤，其余一致
+        const pickCols = `id, event_type, raw_json, msg_timestamp, external_id, conversation_id,
+              sender_id, sender_name, sender_avatar, has_media, created_at, attempts`
         this.pickStmt = db.prepare(`
-            SELECT id, event_type, raw_json, msg_timestamp, external_id, conversation_id,
-              sender_id, sender_name, sender_avatar, attempts FROM queue
+            SELECT ${pickCols} FROM queue
             WHERE channel_id = @channelId AND status = 'pending' AND has_media = 0
+              AND (next_attempt_at IS NULL OR next_attempt_at <= @now)
+            ORDER BY id LIMIT 1
+        `)
+        // 灰度开媒体后用：文本 + 媒体一并取，按 id 串行
+        this.pickAnyStmt = db.prepare(`
+            SELECT ${pickCols} FROM queue
+            WHERE channel_id = @channelId AND status = 'pending'
               AND (next_attempt_at IS NULL OR next_attempt_at <= @now)
             ORDER BY id LIMIT 1
         `)
@@ -179,6 +194,12 @@ export class QueueStore {
         this.deadStmt = db.prepare(`
             UPDATE queue SET status = 'dead', attempts = attempts + 1,
               fail_code = @failCode, retryable = @retryable, last_error = @lastError, updated_at = @now
+            WHERE id = @id AND status = 'sending'
+        `)
+        // 媒体等落盘：回 pending、置 next_attempt_at，但**不累加 attempts**（等落盘不占重试预算，与下游失败区分）
+        this.mediaWaitStmt = db.prepare(`
+            UPDATE queue SET status = 'pending', next_attempt_at = @nextAttemptAt,
+              last_error = @lastError, updated_at = @now
             WHERE id = @id AND status = 'sending'
         `)
         this.resetStuckStmt = db.prepare(
@@ -249,13 +270,18 @@ export class QueueStore {
         return { ...toSummary(r), rawJson: r.raw_json, mediaJson: r.media_json }
     }
 
-    /** 取下一条待投（pending 文本、已到期），原子置 sending；无则 null */
-    claimNext(channelId: string, now: number): ClaimedMessage | null {
+    /**
+     * 取下一条待投（pending、已到期），原子置 sending；无则 null。
+     * includeMedia=false（默认）只取文本（has_media=0），媒体留 pending；true 时文本+媒体一并取，按 id 串行。
+     */
+    claimNext(channelId: string, now: number, includeMedia = false): ClaimedMessage | null {
+        const stmt = includeMedia ? this.pickAnyStmt : this.pickStmt
         return this.db.transaction(() => {
-            const row = this.pickStmt.get({ channelId, now }) as {
+            const row = stmt.get({ channelId, now }) as {
                 id: number, event_type: string, raw_json: string, msg_timestamp: number | null,
                 external_id: string | null, conversation_id: string | null,
-                sender_id: string | null, sender_name: string | null, sender_avatar: string | null, attempts: number
+                sender_id: string | null, sender_name: string | null, sender_avatar: string | null,
+                has_media: number, created_at: number, attempts: number
             } | undefined
             if (!row) return null
             this.toSendingStmt.run({ id: row.id, now })
@@ -263,6 +289,8 @@ export class QueueStore {
                 id: row.id, eventType: row.event_type, rawJson: row.raw_json, msgTimestamp: row.msg_timestamp,
                 externalId: row.external_id, conversationId: row.conversation_id,
                 senderId: row.sender_id, senderName: row.sender_name, senderAvatar: row.sender_avatar,
+                hasMedia: (row.has_media === 1 ? 1 : 0) as 0 | 1,
+                createdAt: row.created_at,
                 attempts: row.attempts,
             }
         })()
@@ -281,6 +309,11 @@ export class QueueStore {
     /** 终止失败：attempts+1、置 dead */
     markDead(id: number, info: { failCode: number | null, retryable: 0 | 1, lastError: string }, now: number): void {
         this.deadStmt.run({ id, now, ...info })
+    }
+
+    /** 媒体等落盘：回 pending、置下次探测时间，但 attempts 不变（不占重试预算） */
+    markMediaWait(id: number, nextAttemptAt: number, now: number, lastError = '等待媒体落盘'): void {
+        this.mediaWaitStmt.run({ id, nextAttemptAt, lastError, now })
     }
 
     /** 启动自愈：把残留 sending（崩溃遗留）全部回 pending */

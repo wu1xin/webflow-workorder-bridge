@@ -80,6 +80,11 @@ export function validateWeflowUpdate(
         errors.accessToken = '请输入 Access Token'
     }
 
+    // fileBaseDir：可选；给了就必须是 trim 后非空的字符串（文件类媒体本地根目录）
+    if (update.fileBaseDir !== undefined && (typeof update.fileBaseDir !== 'string' || !update.fileBaseDir.trim())) {
+        errors.fileBaseDir = '文件根目录不能为空白'
+    }
+
     return { ok: Object.keys(errors).length === 0, errors }
 }
 
@@ -103,13 +108,18 @@ export function validateDownstreamUpdate(update: DownstreamConfigUpdate): Valida
     if (f) {
         const labels: Record<keyof typeof DOWNSTREAM_LIMITS, string> = {
             maxAttempts: '最大重试次数', backoffBaseMs: '退避基数(ms)', backoffCapMs: '退避上限(ms)',
+            mediaWaitCapSec: '媒体等落盘上限(秒)',
         }
         const check = (key: keyof typeof DOWNSTREAM_LIMITS) => {
             const v = f[key]
             if (v === undefined) return
             checkIntRange(errors, `forwarder.${key}`, v, DOWNSTREAM_LIMITS[key], labels[key])
         }
-        check('maxAttempts'); check('backoffBaseMs'); check('backoffCapMs')
+        check('maxAttempts'); check('backoffBaseMs'); check('backoffCapMs'); check('mediaWaitCapSec')
+        // mediaEnabled 是布尔开关，非数值：给了就必须是 boolean
+        if (f.mediaEnabled !== undefined && typeof f.mediaEnabled !== 'boolean') {
+            errors['forwarder.mediaEnabled'] = '媒体链路开关必须为布尔值'
+        }
     }
 
     return { ok: Object.keys(errors).length === 0, errors }

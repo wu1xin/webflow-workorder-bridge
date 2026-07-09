@@ -80,6 +80,23 @@
                             :align="'left'"
                         />
                     </ElFormItem>
+                    <ElFormItem label="媒体转发（灰度）">
+                        <ElSwitch
+                            v-model="form.model.forwarder.mediaEnabled"
+                            active-text="开"
+                            inactive-text="关"
+                        />
+                    </ElFormItem>
+                    <ElFormItem label="媒体等落盘上限(秒)">
+                        <ElInputNumber
+                            v-model="form.model.forwarder.mediaWaitCapSec"
+                            :min="30"
+                            :max="3600"
+                            :precision="0"
+                            :controls="false"
+                            :align="'left'"
+                        />
+                    </ElFormItem>
                 </ElCollapseItem>
             </ElCollapse>
         </ElForm>
@@ -106,19 +123,19 @@ import { ApiError } from '@/api/http'
 import { onMounted, ref, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { testDownstreamPing, setForwarding, fetchForwardingState } from '@/api/config'
-import { type DownstreamConfigUpdate } from '@wb/shared/types'
+import { type DownstreamConfigUpdate, type DownstreamForwarderConfig } from '@wb/shared/types'
 import { ElCard, ElForm, ElFormItem, ElButton, ElInput, ElInputNumber, ElSwitch, ElCollapse, ElCollapseItem, ElMessage, type FormInstance, type FormRules } from 'element-plus'
 
 const store = useConfigStore()
 const pinging = ref(false)
 const forwarding = ref(false)
 
-/** 下游表单模型：连接三件套明文回填 + forwarder 三项调参（可空，留空用后端默认） */
+/** 下游表单模型：连接三件套明文回填 + forwarder 调参（可空，留空用后端默认） */
 interface DownstreamModel {
     baseUrl: string
     siteKey: string
     aesKey: string
-    forwarder: { maxAttempts?: number, backoffBaseMs?: number, backoffCapMs?: number }
+    forwarder: DownstreamForwarderConfig
 }
 
 /** 下游表单数据 */
@@ -158,10 +175,12 @@ onMounted(() => {
 /** 组装更新负载：forwarder 里 undefined 字段过滤掉（留空用后端默认） */
 function buildUpdate(): DownstreamConfigUpdate {
     const f = form.value.model.forwarder
-    const forwarder: Record<string, number> = {}
-    for (const [k, v] of Object.entries(f)) {
-        if (typeof v === 'number') forwarder[k] = v
-    }
+    const forwarder: DownstreamForwarderConfig = {}
+    if (typeof f.maxAttempts === 'number') forwarder.maxAttempts = f.maxAttempts
+    if (typeof f.backoffBaseMs === 'number') forwarder.backoffBaseMs = f.backoffBaseMs
+    if (typeof f.backoffCapMs === 'number') forwarder.backoffCapMs = f.backoffCapMs
+    if (typeof f.mediaWaitCapSec === 'number') forwarder.mediaWaitCapSec = f.mediaWaitCapSec
+    if (typeof f.mediaEnabled === 'boolean') forwarder.mediaEnabled = f.mediaEnabled
     return {
         baseUrl: form.value.model.baseUrl.trim(),
         siteKey: form.value.model.siteKey.trim(),

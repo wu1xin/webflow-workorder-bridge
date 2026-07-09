@@ -22,11 +22,12 @@ export const WEFLOW_LIMITS = {
     reconnectLogIntervalSec: { min: 10, max: 300 },
 } as const
 
-/** 下游 forwarder 数值字段校验边界（仅暴露实际生效的三项） */
+/** 下游 forwarder 数值字段校验边界 */
 export const DOWNSTREAM_LIMITS = {
     maxAttempts: { min: 1, max: 10 },
     backoffBaseMs: { min: 100, max: 60000 },
     backoffCapMs: { min: 1000, max: 600000 },
+    mediaWaitCapSec: { min: 30, max: 3600 },
 } as const
 
 /** WeFlow 连接测试诊断结论 */

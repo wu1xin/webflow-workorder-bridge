@@ -122,6 +122,73 @@ describe('HttpDownstreamClient.receiveMessage', () => {
         expect(body.data.rawid).toBe('1')
         expect(body.file).toBeUndefined()
     })
+
+    it('带 file 时信封序列化出 file.file_id', async () => {
+        let captured: { body: string } | null = null
+        const fetchImpl = ((_url: string, init: { body: string }) => {
+            captured = { body: init.body }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ code: 1, data: {} }) })
+        }) as unknown as typeof fetch
+        await clientWith(fetchImpl).receiveMessage({
+            event: 'message.new', sessionId: 'g@chatroom', data: { rawid: '1' },
+            file: { file_id: 'att_x', url: 'https://oss/x.jpg' },
+        })
+        const body = JSON.parse(captured!.body)
+        expect(body.file).toEqual({ file_id: 'att_x', url: 'https://oss/x.jpg' })
+    })
+})
+
+describe('HttpDownstreamClient.uploadMedia', () => {
+    function clientWith(fetchImpl: typeof fetch) {
+        return new HttpDownstreamClient(CFG, undefined, { fetchImpl, now: () => 1750000000 })
+    }
+    const req = { bytes: Buffer.from('hello world!'), fileName: 'a.jpg', rawid: '73829', mediaType: 'image' }
+
+    it('multipart 表单带 file/rawid/mediaFileName/mediaType，URL 带 uploadMedia + token', async () => {
+        let captured: { url: string, body: FormData } | null = null
+        const fetchImpl = ((url: string, init: { body: FormData }) => {
+            captured = { url, body: init.body }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ code: 1, data: { file_id: 'att_1', url: 'https://oss/a.jpg' } }) })
+        }) as unknown as typeof fetch
+        await clientWith(fetchImpl).uploadMedia(req)
+        expect(captured!.url).toContain('/extra_server/weflow/uploadMedia?task_white_token=')
+        const form = captured!.body
+        expect(form.get('rawid')).toBe('73829')
+        expect(form.get('mediaFileName')).toBe('a.jpg')
+        expect(form.get('mediaType')).toBe('image')
+        expect((form.get('file') as File).name).toBe('a.jpg')
+        expect((form.get('file') as File).size).toBe(12)
+    })
+
+    it('code===1 解析 file_id/url/size/mime/duplicate', async () => {
+        const fetchImpl = (() => Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ code: 1, data: { file_id: 'att_1', url: 'https://oss/a.jpg', size: 12, mime: 'image/jpeg', duplicate: true } }),
+        })) as unknown as typeof fetch
+        const ack = await clientWith(fetchImpl).uploadMedia(req)
+        expect(ack).toMatchObject({ code: 1, fileId: 'att_1', url: 'https://oss/a.jpg', size: 12, mime: 'image/jpeg', duplicate: true })
+    })
+
+    it('code!==1（1002）不抛错，原样返回 code/retryable 供决策', async () => {
+        const fetchImpl = (() => Promise.resolve({
+            ok: true, json: () => Promise.resolve({ code: 1002, msg: '类型不允许', data: { retryable: false } }),
+        })) as unknown as typeof fetch
+        const ack = await clientWith(fetchImpl).uploadMedia(req)
+        expect(ack.code).toBe(1002)
+        expect(ack.retryable).toBe(false)
+    })
+
+    it('传输层错误（非200）抛异常，错误信息不含 token', async () => {
+        expect.assertions(2)
+        const fetchImpl = (() => Promise.resolve({ ok: false, status: 502, text: () => Promise.resolve('bad gateway') })) as unknown as typeof fetch
+        try {
+            await clientWith(fetchImpl).uploadMedia(req)
+        }
+        catch (e) {
+            expect((e as Error).message).toMatch(/502/)
+            expect((e as Error).message).not.toContain('task_white_token')
+        }
+    })
 })
 
 describe('HttpDownstreamClient.ping', () => {
