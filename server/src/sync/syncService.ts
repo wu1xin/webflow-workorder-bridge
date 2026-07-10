@@ -16,7 +16,7 @@ import type { NormalizedMessage } from '../upstream/types.js'
 import type { RevokeWatch } from '../db/queue.js'
 import { idleProgress, type SyncProgress } from './types.js'
 import { GroupSyncService, isWeflowGroup, upsertSeenGroups } from './groupSyncService.js'
-import { parseSystemEvent, type SystemEvent } from './systemMessage.js'
+import { parseSystemEvent, matchGroupRename, type SystemEvent } from './systemMessage.js'
 import { isRevokeRow, computeRevocableUntil, NEAR_REVOKE_WINDOW_SEC } from './revoke.js'
 
 /** 补偿默认最大回溯窗口（秒）：默认 24h。超过则告警并截断起点（FR-SYNC-04 / FR-REL-08）。 */
@@ -38,12 +38,23 @@ export interface RealtimeTrigger {
     ts: number
 }
 
+/** SSE 信封富解析结果（含群生命周期旁路所需字段：sessionType / content / avatarUrl） */
+export interface SseEnvelope extends RealtimeTrigger {
+    /** 会话类型（'group' | 'single' | ...；缺省 ''） */
+    sessionType: string
+    /** 系统/正文内容原文（用于改名匹配；缺省 ''） */
+    content: string
+    /** 群头像 URL（真实 qlogo 地址、可信；缺省 null） */
+    avatarUrl: string | null
+}
+
 /**
- * 从 SSE 负载解出实时回查触发参数。宽松解析（FR-RECV-04）：
+ * 从 SSE 负载富解析信封。宽松解析（FR-RECV-04）：
  * 非 message.new / JSON 不可解析 / 缺 sessionId 或 timestamp 一律返回 null（调用方据此跳过）。
+ * sessionType/content 缺省 ''，avatarUrl 缺省 null。
  * 撤回 message.revoke 暂不实现（WeFlow 端需逐群配置才可监听，覆盖不可靠）。
  */
-export function parseRealtimeTrigger(data: string): RealtimeTrigger | null {
+export function parseSseEnvelope(data: string): SseEnvelope | null {
     let obj: unknown
     try {
         obj = JSON.parse(data)
@@ -56,7 +67,24 @@ export function parseRealtimeTrigger(data: string): RealtimeTrigger | null {
     const talker = typeof o.sessionId === 'string' ? o.sessionId : null
     const ts = typeof o.timestamp === 'number' ? o.timestamp : null
     if (!talker || ts === null) return null
-    return { talker, ts }
+    return {
+        talker,
+        ts,
+        sessionType: typeof o.sessionType === 'string' ? o.sessionType : '',
+        content: typeof o.content === 'string' ? o.content : '',
+        avatarUrl: typeof o.avatarUrl === 'string' ? o.avatarUrl : null,
+    }
+}
+
+/** 从 SSE 负载解出实时回查触发参数（parseSseEnvelope 的收窄委托，供既有调用/测试沿用）。 */
+export function parseRealtimeTrigger(data: string): RealtimeTrigger | null {
+    const env = parseSseEnvelope(data)
+    return env ? { talker: env.talker, ts: env.ts } : null
+}
+
+/** 群会话判定：sessionType==='group' 或 talker 以 @chatroom 结尾（单聊不触发群生命周期旁路） */
+function isGroupSession(env: SseEnvelope): boolean {
+    return env.sessionType === 'group' || env.talker.endsWith('@chatroom')
 }
 
 /** 同步所需的 WeFlow 拉取能力（便于测试注入桩） */
@@ -425,15 +453,48 @@ export class SyncService implements SyncCoordinator {
      * 仅处理放行群的 message.new；其余一律跳过（不发 REST）。
      */
     ingestRealtime(evt: SseEvent): Promise<void> {
-        const trig = parseRealtimeTrigger(evt.data)
-        if (!trig) {
+        const env = parseSseEnvelope(evt.data)
+        if (!env) {
             this.log.debug({ event: evt.event }, '[sync] 忽略非 message.new 或不可解析的 SSE 事件')
             return Promise.resolve()
         }
-        if (!this.db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, trig.talker)) {
+        // 群生命周期旁路（放行闸门之前、同步执行，仅群会话）：新入群登记 / 非放行群改名重裁
+        if (isGroupSession(env)) this.detectGroupLifecycle(env)
+        if (!this.db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, env.talker)) {
             return Promise.resolve() // 非放行群：连 REST 都不发
         }
-        return this.scheduleRealtimePull(trig.talker, trig.ts)
+        return this.scheduleRealtimePull(env.talker, env.ts)
+    }
+
+    /**
+     * 群生命周期旁路（同步执行于 ingestRealtime 前缀，放行闸门之前）：
+     *   - 未知群（首次见到）→ onNewGroup 登记 + 单群裁决；upsertSeen 同步建行 → 同群突发天然单次触发。
+     *   - 已知但未放行群 → SSE 信封 content 匹配改名 → 以新名重裁（放行群改名交由 REST localType 安全路径）。
+     */
+    private detectGroupLifecycle(env: SseEnvelope): void {
+        const now = nowSec()
+        if (!this.db.chatGroup.exists(WEFLOW_CHANNEL_ID, env.talker)) {
+            this.onNewGroup(env.talker, env.avatarUrl, now)
+            return
+        }
+        if (!this.db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, env.talker)) {
+            const newName = matchGroupRename(env.content)
+            if (newName) this.onGroupRenamed(env.talker, newName, now)
+        }
+    }
+
+    /**
+     * 新入群：先 upsertSeen 建行（同步、含可信头像 → 满足 exists 防抖 + 前端可见），配了下游再单群裁决。
+     * 群名从 SSE 不可信（实测等于 sessionId），故不带 displayName，由下一轮消息同步的 chatlab meta 回补。
+     * fire-and-forget：错误由 syncAll 内部自吞（markSyncFailed、不误动裁决、告警）。
+     */
+    private onNewGroup(talker: string, avatarUrl: string | null, now: number): void {
+        this.log.info({ talker }, '[sync] 检测到新入群')
+        this.db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, talker, { avatarUrl }, now)
+        if (this.groupSync) {
+            const session: WeflowSession = { username: talker, type: 2 }
+            void this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [session])
+        }
     }
 
     /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseSystemEvent } from './systemMessage.js'
+import { parseSystemEvent, matchGroupRename } from './systemMessage.js'
 
 describe('parseSystemEvent — 群改名识别', () => {
     it('自己改名：你修改群名为“X”（全角引号、含业务 ID）', () => {
@@ -36,5 +36,21 @@ describe('parseSystemEvent — 群改名识别', () => {
 
     it('改名为空串 → null（不产生空名事件）', () => {
         expect(parseSystemEvent({ localType: 10000, content: '你修改群名为“”' })).toBeNull()
+    })
+})
+
+describe('matchGroupRename — 纯 content 改名匹配（SSE 信封路径共用，无 localType 闸门）', () => {
+    it('命中改名文案 → 返回 trim 后新名', () => {
+        expect(matchGroupRename('你修改群名为“gp18267-06”')).toBe('gp18267-06')
+        expect(matchGroupRename('“张三”修改群聊名称为"新名"')).toBe('新名')
+    })
+
+    it('非改名文案 → null', () => {
+        expect(matchGroupRename('“无心”邀请你加入了群聊')).toBeNull()
+        expect(matchGroupRename('一条普通消息')).toBeNull()
+    })
+
+    it('新名为空串 → null', () => {
+        expect(matchGroupRename('你修改群名为“”')).toBeNull()
     })
 })

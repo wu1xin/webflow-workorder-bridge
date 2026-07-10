@@ -22,17 +22,25 @@ export type SystemEvent
     = { kind: 'group_renamed', newName: string }
 
 /**
+ * 纯 content 改名匹配：命中返回 trim 后的新名，否则 null。
+ * 无 localType 闸门（供 SSE 信封路径共用；REST 路径的 parseSystemEvent 会先过 localType 再调此函数）。
+ */
+export function matchGroupRename(content: string): string | null {
+    const m = GROUP_RENAME_RE.exec(content)
+    if (!m) return null
+    const newName = m[1].trim()
+    return newName ? newName : null
+}
+
+/**
  * 尝试性解析系统消息。非系统消息 / 无法识别的系统消息一律返回 null（调用方据此跳过、不做副作用）。
  */
 export function parseSystemEvent(msg: WeflowMessage): SystemEvent | null {
     if (msg.localType !== SYSTEM_LOCAL_TYPE) return null
     const content = typeof msg.content === 'string' ? msg.content : ''
 
-    const rename = GROUP_RENAME_RE.exec(content)
-    if (rename) {
-        const newName = rename[1].trim()
-        if (newName) return { kind: 'group_renamed', newName }
-    }
+    const newName = matchGroupRename(content)
+    if (newName) return { kind: 'group_renamed', newName }
 
     return null
 }

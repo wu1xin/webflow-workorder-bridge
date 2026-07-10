@@ -94,6 +94,11 @@ export class ChatGroupStore {
         return row?.push_allowed === 1
     }
 
+    /** 该群是否已登记（区分「未知新群」与「已知但未放行」；未知群启发式的判据） */
+    exists(channelId: string, conversationId: string): boolean {
+        return this.isAllowedStmt.get(channelId, conversationId) !== undefined
+    }
+
     /** 白名单回写：sentIds 中命中 allowedIds 置 1、其余置 0，均标记 synced（单事务） */
     markSynced(channelId: string, sentIds: string[], allowedIds: string[], now: number): void {
         const allow = new Set(allowedIds)

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Db } from '../db/database.js'
-import { SyncService, parseRealtimeTrigger } from './syncService.js'
+import { SyncService, parseRealtimeTrigger, parseSseEnvelope } from './syncService.js'
 import { WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM } from '../weflow/adapter.js'
 import type { WeflowSession, MessagesPage, MembersResult } from '../weflow/restClient.js'
 
@@ -267,6 +267,30 @@ describe('parseRealtimeTrigger（SSE message.new 触发参数解析）', () => {
     })
 })
 
+describe('parseSseEnvelope（SSE 信封富解析）', () => {
+    it('合法 message.new → 全字段', () => {
+        const data = JSON.stringify({
+            event: 'message.new', sessionId: 'g@chatroom', sessionType: 'group',
+            avatarUrl: 'https://wx/g.png', groupName: 'g@chatroom', content: '你修改群名为“X”', timestamp: 123,
+        })
+        expect(parseSseEnvelope(data)).toEqual({
+            talker: 'g@chatroom', ts: 123, sessionType: 'group', content: '你修改群名为“X”', avatarUrl: 'https://wx/g.png',
+        })
+    })
+
+    it('缺 sessionType/content/avatarUrl → 缺省 ""/""/null', () => {
+        expect(parseSseEnvelope(JSON.stringify({ event: 'message.new', sessionId: 'g@chatroom', timestamp: 1 })))
+            .toEqual({ talker: 'g@chatroom', ts: 1, sessionType: '', content: '', avatarUrl: null })
+    })
+
+    it('非 message.new / 坏 JSON / 缺 sessionId|timestamp → null', () => {
+        expect(parseSseEnvelope(JSON.stringify({ event: 'message.revoke', sessionId: 'g@chatroom', timestamp: 1 }))).toBeNull()
+        expect(parseSseEnvelope('{nope')).toBeNull()
+        expect(parseSseEnvelope(JSON.stringify({ event: 'message.new', timestamp: 1 }))).toBeNull()
+        expect(parseSseEnvelope(JSON.stringify({ event: 'message.new', sessionId: 'g@chatroom' }))).toBeNull()
+    })
+})
+
 describe('SyncService 实时入库（SSE message.new 触发 REST 回查）', () => {
     let db: Db
     beforeEach(() => { db = Db.openMemory() })
@@ -424,6 +448,119 @@ describe('SyncService 系统消息分发（群改名 localType 10000）', () => 
         await svc.ingestRealtime(sseEvent('proj@chatroom', 300))
 
         expect(db.chatGroup.listAll(WEFLOW_CHANNEL_ID)[0].groupName).toBe('仅本地名')
+    })
+})
+
+describe('SyncService 群生命周期旁路（新入群 / 非放行群改名，放行闸门之前）', () => {
+    let db: Db
+    beforeEach(() => { db = Db.openMemory() })
+    afterEach(() => db.close())
+
+    /** 构造一条群 SSE 事件（可带 sessionType/content/avatarUrl） */
+    function groupSse(sessionId: string, opts: { content?: string, sessionType?: string, avatarUrl?: string | null, ts?: number } = {}) {
+        const { content = 'hi', sessionType = 'group', avatarUrl = null, ts = 100 } = opts
+        return { event: 'message.new', data: JSON.stringify({ event: 'message.new', sessionId, sessionType, avatarUrl, content, timestamp: ts }) }
+    }
+
+    /** 收集 syncAll 调用的完整会话，便于断言回推内容（noop：不改库） */
+    function spyGroupSync() {
+        const calls: WeflowSession[] = []
+        return {
+            calls,
+            syncAll: (_ch: string, _pf: string, sessions: WeflowSession[]) => { calls.push(...sessions); return Promise.resolve() },
+        }
+    }
+
+    /** 计数 fetchMessagesPage 的 client（断言未放行群不回查） */
+    function countingClient() {
+        const state = { pulls: 0 }
+        return {
+            state,
+            client: {
+                listSessions: () => Promise.resolve([] as WeflowSession[]),
+                fetchMessagesPage: () => { state.pulls += 1; return Promise.resolve({ messages: [], hasMore: false }) },
+            },
+        }
+    }
+
+    it('新入群：未知群触发单群 syncAll（displayName=null, type=2）并建行，不回查 REST', async () => {
+        const gs = spyGroupSync()
+        const { state, client } = countingClient()
+        const svc = new SyncService({ ...deps(db, client as never), groupSync: gs as never })
+
+        await svc.ingestRealtime(groupSse('new@chatroom', { avatarUrl: 'https://wx/g.png' }))
+
+        expect(gs.calls).toEqual([{ username: 'new@chatroom', type: 2 }]) // 名字未知（省略 displayName）→ 真实 syncAll 内 ?? null
+        expect(db.chatGroup.exists(WEFLOW_CHANNEL_ID, 'new@chatroom')).toBe(true)
+        expect(db.chatGroup.listAll(WEFLOW_CHANNEL_ID)[0].avatarUrl).toBe('https://wx/g.png') // 可信头像落库，喂给真实 syncAll
+        expect(state.pulls).toBe(0) // 未放行 → 不回查正文
+    })
+
+    it('入群突发：同群多条 SSE 只触发一次 syncAll（建行即已知，天然防抖）', async () => {
+        const gs = spyGroupSync()
+        const { client } = countingClient()
+        const svc = new SyncService({ ...deps(db, client as never), groupSync: gs as never })
+
+        await svc.ingestRealtime(groupSse('new@chatroom', { ts: 100 }))
+        await svc.ingestRealtime(groupSse('new@chatroom', { ts: 101 }))
+        await svc.ingestRealtime(groupSse('new@chatroom', { ts: 102 }))
+
+        expect(gs.calls).toHaveLength(1)
+    })
+
+    it('未知单聊：isGroupSession 守卫拦截，不登记、不 syncAll', async () => {
+        const gs = spyGroupSync()
+        const { client } = countingClient()
+        const svc = new SyncService({ ...deps(db, client as never), groupSync: gs as never })
+
+        await svc.ingestRealtime(groupSse('wxid_bob', { sessionType: 'single' }))
+
+        expect(gs.calls).toEqual([])
+        expect(db.chatGroup.exists(WEFLOW_CHANNEL_ID, 'wxid_bob')).toBe(false)
+    })
+
+    it('未配 groupSync：新群仅 upsertSeen 建行（默认不放行）、不抛', async () => {
+        const { client } = countingClient()
+        const svc = new SyncService({ ...deps(db, client as never), groupSync: undefined })
+
+        await svc.ingestRealtime(groupSse('new@chatroom', { avatarUrl: 'https://wx/g.png' }))
+
+        expect(db.chatGroup.exists(WEFLOW_CHANNEL_ID, 'new@chatroom')).toBe(true)
+        expect(db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, 'new@chatroom')).toBe(false)
+    })
+
+    it('已知非放行群改名：SSE 信封 content 匹配 → 以新名回推单群', async () => {
+        db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, 'known@chatroom', { groupName: '旧名' }, 1) // 已知、未放行
+        const gs = spyGroupSync()
+        const { client } = countingClient()
+        const svc = new SyncService({ ...deps(db, client as never), groupSync: gs as never })
+
+        await svc.ingestRealtime(groupSse('known@chatroom', { content: '你修改群名为“新名-18267”' }))
+
+        expect(gs.calls).toEqual([{ username: 'known@chatroom', displayName: '新名-18267', type: 2 }])
+    })
+
+    it('已知非放行群普通消息：不触发 syncAll', async () => {
+        db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, 'known@chatroom', {}, 1)
+        const gs = spyGroupSync()
+        const { client } = countingClient()
+        const svc = new SyncService({ ...deps(db, client as never), groupSync: gs as never })
+
+        await svc.ingestRealtime(groupSse('known@chatroom', { content: '一条普通消息' }))
+
+        expect(gs.calls).toEqual([])
+    })
+
+    it('放行群改名：信封路径不触发（交由 REST localType 路径），转而回查 REST', async () => {
+        allowGroup(db, 'proj@chatroom')
+        const gs = spyGroupSync()
+        const { state, client } = countingClient()
+        const svc = new SyncService({ ...deps(db, client as never), groupSync: gs as never })
+
+        await svc.ingestRealtime(groupSse('proj@chatroom', { content: '你修改群名为“不该走信封”' }))
+
+        expect(gs.calls).toEqual([]) // 信封改名分支只管非放行群
+        expect(state.pulls).toBeGreaterThanOrEqual(1) // 放行群照常回查
     })
 })
 

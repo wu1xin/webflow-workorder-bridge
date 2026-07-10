@@ -22,6 +22,15 @@ describe('ChatGroupStore', () => {
         expect(store.isPushAllowed(CH, 'nope@chatroom')).toBe(false)
     })
 
+    it('exists：见过为 true、未见为 false（区分未知群与已知不放行群）', () => {
+        expect(store.exists(CH, 'g1@chatroom')).toBe(false)
+        store.upsertSeen(CH, PF, 'g1@chatroom', {}, 100)
+        expect(store.exists(CH, 'g1@chatroom')).toBe(true)
+        // 已知但未放行：仍算 exists（区别于未知群启发式）
+        expect(store.isPushAllowed(CH, 'g1@chatroom')).toBe(false)
+        expect(store.exists('weflow:other', 'g1@chatroom')).toBe(false)
+    })
+
     it('upsertSeen 二次只更名称/last_seen，不覆盖裁决', () => {
         store.upsertSeen(CH, PF, 'g1@chatroom', { groupName: '旧名' }, 100)
         store.markSynced(CH, ['g1@chatroom'], ['g1@chatroom'], 200)

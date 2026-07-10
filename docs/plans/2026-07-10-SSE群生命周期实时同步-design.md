@@ -119,8 +119,8 @@ exists(channelId: string, conversationId: string): boolean  // = isAllowedStmt.g
 private onNewGroup(talker: string, avatarUrl: string | null, now: number): void {
   this.db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, talker, { avatarUrl }, now)  // 建行
   if (this.groupSync) {
-    const session: WeflowSession = { username: talker, displayName: null, type: 2 }  // 名字不可信 → null，靠 chatlab 回补
-    void this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [session])       // 同步前缀再 upsert，头像被 COALESCE 保留
+    const session: WeflowSession = { username: talker, type: 2 }   // 名字不可信 → 省略 displayName（syncAll 内 ?? null），靠 chatlab 回补
+    void this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [session])   // 同步前缀再 upsert，头像被 COALESCE 保留
   }
 }
 ```
