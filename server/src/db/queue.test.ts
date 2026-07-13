@@ -67,6 +67,14 @@ describe('QueueStore', () => {
         expect(claimed?.senderName).toBe('无心')
         expect(claimed?.senderAvatar).toBe('https://av/a.png')
     })
+
+    it('maxTimestampForConversation：取该会话最大 msg_timestamp，无记录返回 null', () => {
+        store.enqueue(sample({ conversationId: 'g@chatroom', externalId: 's1', msgTimestamp: 100 }), 1)
+        store.enqueue(sample({ conversationId: 'g@chatroom', externalId: 's2', msgTimestamp: 300 }), 2)
+        store.enqueue(sample({ conversationId: 'other@chatroom', externalId: 's3', msgTimestamp: 999 }), 3)
+        expect(store.maxTimestampForConversation('weflow:default', 'g@chatroom')).toBe(300)
+        expect(store.maxTimestampForConversation('weflow:default', 'none@chatroom')).toBeNull()
+    })
 })
 
 describe('QueueStore.list / getById', () => {

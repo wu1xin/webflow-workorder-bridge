@@ -130,6 +130,7 @@ export class QueueStore {
     private readonly deadStmt: BetterSqlite3.Statement
     private readonly resetStuckStmt: BetterSqlite3.Statement
     private readonly retryDeadStmt: BetterSqlite3.Statement
+    private readonly maxTsStmt: BetterSqlite3.Statement
 
     constructor(db: BetterSqlite3.Database) {
         this.db = db
@@ -210,6 +211,10 @@ export class QueueStore {
               fail_code = NULL, retryable = NULL, last_error = NULL, updated_at = @now
             WHERE channel_id = @channelId AND id = @id AND status = 'dead'
         `)
+        // 按群水位：该会话已入队消息的最大 msg_timestamp（放行边沿回灌起点，见 2026-07-13-…-design.md §3.2）
+        this.maxTsStmt = db.prepare(
+            'SELECT MAX(msg_timestamp) AS ts FROM queue WHERE channel_id = ? AND conversation_id = ?',
+        )
     }
 
     /** 入队一条 pending 消息 */
@@ -239,6 +244,11 @@ export class QueueStore {
     /** 某状态的队列条数（默认 pending），用于状态快照展示积压 */
     countByStatus(status: string = 'pending'): number {
         return (this.countStmt.get(status) as { c: number }).c
+    }
+
+    /** 某会话已入队消息的最大 msg_timestamp（放行边沿回灌起点）；无记录/全空返回 null。 */
+    maxTimestampForConversation(channelId: string, conversationId: string): number | null {
+        return (this.maxTsStmt.get(channelId, conversationId) as { ts: number | null }).ts
     }
 
     /** 分页 + 可选过滤列出消息（不含 raw_json），返回当页与总数 */
