@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Db } from '../db/database.js'
 import { SyncService, parseRealtimeTrigger, parseSseEnvelope } from './syncService.js'
+import { GroupSyncService } from './groupSyncService.js'
 import { WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM } from '../weflow/adapter.js'
 import type { WeflowSession, MessagesPage, MembersResult } from '../weflow/restClient.js'
 
@@ -18,9 +19,9 @@ function stubClient(sessions: WeflowSession[], pages: Record<string, MessagesPag
 }
 
 // 群同步桩：默认 no-op（测试自己预置 chat_group 放行）
-const noopGroupSync = { syncAll: () => Promise.resolve() }
+const noopGroupSync = { syncAll: () => Promise.resolve([] as string[]) }
 
-function deps(db: Db, client: ReturnType<typeof stubClient>, groupSync: { syncAll: () => Promise<void> } = noopGroupSync) {
+function deps(db: Db, client: ReturnType<typeof stubClient>, groupSync: { syncAll: () => Promise<string[]> } = noopGroupSync) {
     const noopLog = { info() {}, warn() {}, error() {}, debug() {} } as never
     return {
         store: { get: () => ({ weflow: { host: 'h', port: 1, accessToken: 't' } }), getWeflow: () => ({ host: 'h', port: 1, accessToken: 't' }) } as never,
@@ -203,7 +204,7 @@ describe('SyncService.syncGroupsNow（手动立即同步群）', () => {
                 const groups = sessions.filter(s => s.username.endsWith('@chatroom'))
                 for (const g of groups) db.chatGroup.upsertSeen(channelId, WEFLOW_PLATFORM, g.username, {}, 1)
                 db.chatGroup.markSynced(channelId, groups.map(g => g.username), ['g1@chatroom'], 1)
-                return Promise.resolve()
+                return Promise.resolve([] as string[])
             },
         }
         const svc = new SyncService({ ...deps(db, client), groupSync: groupSync as never })
@@ -397,7 +398,7 @@ describe('SyncService 系统消息分发（群改名 localType 10000）', () => 
             calls,
             syncAll: (_ch: string, _pf: string, sessions: WeflowSession[]) => {
                 for (const s of sessions) calls.push({ conv: s.username, name: s.displayName })
-                return Promise.resolve()
+                return Promise.resolve([] as string[])
             },
         }
     }
@@ -467,7 +468,7 @@ describe('SyncService 群生命周期旁路（新入群 / 非放行群改名，�
         const calls: WeflowSession[] = []
         return {
             calls,
-            syncAll: (_ch: string, _pf: string, sessions: WeflowSession[]) => { calls.push(...sessions); return Promise.resolve() },
+            syncAll: (_ch: string, _pf: string, sessions: WeflowSession[]) => { calls.push(...sessions); return Promise.resolve([] as string[]) },
         }
     }
 
@@ -562,6 +563,70 @@ describe('SyncService 群生命周期旁路（新入群 / 非放行群改名，�
         expect(gs.calls).toEqual([]) // 信封改名分支只管非放行群
         expect(state.pulls).toBeGreaterThanOrEqual(1) // 放行群照常回查
     })
+})
+
+describe('SyncService 放行边沿自动回灌（backfillNewlyAllowed）', () => {
+    let db: Db
+    beforeEach(() => { db = Db.openMemory() })
+    afterEach(() => db.close())
+
+    const gsLog = { info() {}, warn() {}, error() {}, debug() {} } as never
+
+    it('backfillNewlyAllowed：起点=该群 queue 最大 msg_timestamp（无记录则 0）', async () => {
+        allowGroup(db, 'proj@chatroom')
+        db.queue.enqueue({
+            channelId: WEFLOW_CHANNEL_ID, platform: WEFLOW_PLATFORM, eventType: 'message.new',
+            externalId: 's-old', conversationId: 'proj@chatroom', senderId: null, senderName: null, senderAvatar: null,
+            msgTimestamp: 250, hasMedia: 0, rawJson: '{}', mediaJson: null, ingestPath: 'sse', revocableUntil: null,
+        }, 1)
+        let seenStart = -1
+        const client = {
+            listSessions: () => Promise.resolve([] as WeflowSession[]),
+            fetchMessagesPage: (_t: string, start: number) => { seenStart = start; return Promise.resolve({ messages: [], hasMore: false }) },
+            fetchMembers: () => Promise.resolve({ groupName: null, groupAvatar: null, members: new Map() }),
+        }
+        const svc = new SyncService(deps(db, client as never))
+        await svc['backfillNewlyAllowed'](['proj@chatroom'])
+        expect(seenStart).toBe(250)
+
+        await svc['backfillNewlyAllowed'](['fresh@chatroom'])
+        expect(seenStart).toBe(0)
+    })
+
+    it('空列表：no-op、不发 REST', async () => {
+        let calls = 0
+        const client = {
+            listSessions: () => Promise.resolve([] as WeflowSession[]),
+            fetchMessagesPage: () => { calls += 1; return Promise.resolve({ messages: [], hasMore: false }) },
+            fetchMembers: () => Promise.resolve({ groupName: null, groupAvatar: null, members: new Map() }),
+        }
+        const svc = new SyncService(deps(db, client as never))
+        await svc['backfillNewlyAllowed']([])
+        expect(calls).toBe(0)
+    })
+
+    it('端到端：新入群下游放行 → backfill 从 0 全量回灌该群历史（ingest_path=sse）', async () => {
+        const client = stubClient([], { 'proj@chatroom': { messages: [
+            { serverId: 's1', createTime: 100, content: 'a' },
+            { serverId: 's2', createTime: 200, content: 'b' },
+        ], hasMore: false } })
+        const groupSync = new GroupSyncService({
+            db, downstream: { syncGroups: () => Promise.resolve({ allowed: ['proj@chatroom'] }) } as never,
+            log: gsLog, alert: { send() {} }, now: () => 1,
+        })
+        const svc = new SyncService({ ...deps(db, client), groupSync })
+
+        await svc.ingestRealtime(groupSse('proj@chatroom', {}))
+
+        expect(db.queue.countByStatus('pending')).toBe(2)
+        const { items } = db.queue.list(WEFLOW_CHANNEL_ID, {}, 10, 0)
+        expect(items.every(i => i.ingestPath === 'sse')).toBe(true)
+    })
+
+    function groupSse(sessionId: string, opts: { content?: string, sessionType?: string, avatarUrl?: string | null, ts?: number } = {}) {
+        const { content = 'hi', sessionType = 'group', avatarUrl = null, ts = 100 } = opts
+        return { event: 'message.new', data: JSON.stringify({ event: 'message.new', sessionId, sessionType, avatarUrl, content, timestamp: ts }) }
+    }
 })
 
 describe('SyncService 撤回检测（revocable_until 看守 + 对账扫描）', () => {

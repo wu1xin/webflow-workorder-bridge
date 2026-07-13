@@ -197,7 +197,9 @@ export class SyncService implements SyncCoordinator {
             .then((sessions) => {
                 if (groupSync) return groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, sessions)
                 upsertSeenGroups(this.db, WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, sessions, nowSec())
+                return [] as string[]
             })
+            .then((newlyAllowed) => this.backfillNewlyAllowed(newlyAllowed))
             .then((): SyncGroupsResult => {
                 const all = this.db.chatGroup.listAll(WEFLOW_CHANNEL_ID)
                 return { ok: true, total: all.length, allowed: all.filter(g => g.pushAllowed).length }
@@ -260,7 +262,7 @@ export class SyncService implements SyncCoordinator {
             this.log.info({ since: start }, '[sync] 开始补偿同步（从水位拉缺口）')
             const sessions = await client.listSessions()
             this.log.info({ sessions: sessions.length }, '[sync] 列会话完成')
-            await this.syncGroups(sessions)
+            const newlyAllowed = await this.syncGroups(sessions)
             // 只挑「放行群 ∩ 起点之后有更新」的会话（FR-REL-03）；缺 lastTimestamp 的保守纳入
             const candidates = this.allowedGroupSessions(sessions)
                 .filter(s => s.lastTimestamp === undefined || s.lastTimestamp >= start)
@@ -272,20 +274,21 @@ export class SyncService implements SyncCoordinator {
             }
             this.advanceWatermark(watermark)
             this.finish()
+            await this.backfillNewlyAllowed(newlyAllowed) // 边沿群空档在全局水位之下，主循环拉不到，单独按群水位补
             this.log.info({ enqueued: this.progress.enqueued, duplicates: this.progress.duplicates, since: start }, '[sync] 补偿同步完成')
         } catch (e) {
             this.fail(e, '补偿同步')
         }
     }
 
-    /** 列会话后同步群到下游；未配置 groupSync 时仍把所有群入库（默认不放行、本轮不入队） */
-    private async syncGroups(sessions: WeflowSession[]): Promise<void> {
+    /** 列会话后同步群到下游；未配置 groupSync 时仍把所有群入库（默认不放行、本轮不入队）。返回本轮新放行群。 */
+    private syncGroups(sessions: WeflowSession[]): Promise<string[]> {
         if (!this.groupSync) {
             upsertSeenGroups(this.db, WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, sessions, nowSec())
             this.log.warn('[sync] 未配置下游群同步，所有群已入库但默认不放行、本轮不入队')
-            return
+            return Promise.resolve([])
         }
-        await this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, sessions)
+        return this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, sessions)
     }
 
     /** 会话中筛出「是群且已被下游放行」的，作为消息拉取范围 */
@@ -422,24 +425,25 @@ export class SyncService implements SyncCoordinator {
         if (!event) return
         switch (event.kind) {
             case 'group_renamed':
-                this.onGroupRenamed(talker, event.newName, now)
+                void this.onGroupRenamed(talker, event.newName, now)
                 break
         }
     }
 
     /**
      * 群改名：以新名回推下游单群（复用 groupSync.syncAll，其内部先覆盖本地名再发下游、按白名单重新裁决）。
-     * fire-and-forget：错误由 syncAll 内部自吞（标 failed、不误关裁决、告警），不影响落库。
-     * 未配置下游时仅更新本地群名（前端列表可见）。
+     * 返回 Promise：若重裁把群从不放行翻为放行(0→1)则 backfillNewlyAllowed 回灌该群空档。
+     * 错误由 syncAll 内部自吞（标 failed、不误关裁决、告警）。未配置下游时仅更新本地群名。
      */
-    private onGroupRenamed(conversationId: string, newName: string, now: number): void {
+    private onGroupRenamed(conversationId: string, newName: string, now: number): Promise<void> {
         this.log.info({ conversationId, newName }, '[sync] 检测到群改名')
-        if (this.groupSync) {
-            const session: WeflowSession = { username: conversationId, displayName: newName, type: 2 }
-            void this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [session])
-            return
+        if (!this.groupSync) {
+            this.db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, conversationId, { groupName: newName }, now)
+            return Promise.resolve()
         }
-        this.db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, conversationId, { groupName: newName }, now)
+        const session: WeflowSession = { username: conversationId, displayName: newName, type: 2 }
+        return this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [session])
+            .then(newlyAllowed => this.backfillNewlyAllowed(newlyAllowed))
     }
 
     // ── 实时入库（SSE 当触发器 → 回查 REST） ───────────────────────────
@@ -458,12 +462,12 @@ export class SyncService implements SyncCoordinator {
             this.log.debug({ event: evt.event }, '[sync] 忽略非 message.new 或不可解析的 SSE 事件')
             return Promise.resolve()
         }
-        // 群生命周期旁路（放行闸门之前、同步执行，仅群会话）：新入群登记 / 非放行群改名重裁
-        if (isGroupSession(env)) this.detectGroupLifecycle(env)
+        // 群生命周期旁路（放行闸门之前、同步前缀执行 upsertSeen 建行以防抖，仅群会话）
+        const lifecycle = isGroupSession(env) ? this.detectGroupLifecycle(env) : Promise.resolve()
         if (!this.db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, env.talker)) {
-            return Promise.resolve() // 非放行群：连 REST 都不发
+            return lifecycle // 非放行群：不发实时回查；但等待重裁+可能的回灌完成（可测/错误传播）
         }
-        return this.scheduleRealtimePull(env.talker, env.ts)
+        return Promise.all([lifecycle, this.scheduleRealtimePull(env.talker, env.ts)]).then(() => {})
     }
 
     /**
@@ -471,30 +475,43 @@ export class SyncService implements SyncCoordinator {
      *   - 未知群（首次见到）→ onNewGroup 登记 + 单群裁决；upsertSeen 同步建行 → 同群突发天然单次触发。
      *   - 已知但未放行群 → SSE 信封 content 匹配改名 → 以新名重裁（放行群改名交由 REST localType 安全路径）。
      */
-    private detectGroupLifecycle(env: SseEnvelope): void {
+    private detectGroupLifecycle(env: SseEnvelope): Promise<void> {
         const now = nowSec()
         if (!this.db.chatGroup.exists(WEFLOW_CHANNEL_ID, env.talker)) {
-            this.onNewGroup(env.talker, env.avatarUrl, now)
-            return
+            return this.onNewGroup(env.talker, env.avatarUrl, now)
         }
         if (!this.db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, env.talker)) {
             const newName = matchGroupRename(env.content)
-            if (newName) this.onGroupRenamed(env.talker, newName, now)
+            if (newName) return this.onGroupRenamed(env.talker, newName, now)
         }
+        return Promise.resolve()
     }
 
     /**
      * 新入群：先 upsertSeen 建行（同步、含可信头像 → 满足 exists 防抖 + 前端可见），配了下游再单群裁决。
-     * 群名从 SSE 不可信（实测等于 sessionId），故不带 displayName，由下一轮消息同步的 chatlab meta 回补。
-     * fire-and-forget：错误由 syncAll 内部自吞（markSyncFailed、不误动裁决、告警）。
+     * 群名从 SSE 不可信，故不带 displayName，由下一轮消息同步的 chatlab meta 回补。
+     * 返回 Promise：syncAll 裁决 → 若翻放行(0→1)则 backfillNewlyAllowed 回灌该群历史（首次开通 start=0 全量）。
      */
-    private onNewGroup(talker: string, avatarUrl: string | null, now: number): void {
+    private onNewGroup(talker: string, avatarUrl: string | null, now: number): Promise<void> {
         this.log.info({ talker }, '[sync] 检测到新入群')
         this.db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, talker, { avatarUrl }, now)
-        if (this.groupSync) {
-            const session: WeflowSession = { username: talker, type: 2 }
-            void this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [session])
-        }
+        if (!this.groupSync) return Promise.resolve()
+        const session: WeflowSession = { username: talker, type: 2 }
+        return this.groupSync.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [session])
+            .then(newlyAllowed => this.backfillNewlyAllowed(newlyAllowed))
+    }
+
+    /**
+     * 放行边沿回灌：对每个新放行群，从其 queue 已入队水位（无记录则 0）定向回拉到现在，
+     * 补齐不放行期间丢失的空档。复用 scheduleRealtimePull（按 talker 合并、dedup 兜底、不碰全局水位）。
+     */
+    private backfillNewlyAllowed(convIds: string[]): Promise<void> {
+        if (convIds.length === 0) return Promise.resolve()
+        return Promise.all(convIds.map((conv) => {
+            const start = this.db.queue.maxTimestampForConversation(WEFLOW_CHANNEL_ID, conv) ?? 0
+            this.log.info({ conv, start }, '[sync] 放行边沿，回灌该群空档')
+            return this.scheduleRealtimePull(conv, start)
+        })).then(() => {})
     }
 
     /**
