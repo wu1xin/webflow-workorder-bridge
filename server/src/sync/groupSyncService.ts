@@ -53,11 +53,11 @@ export class GroupSyncService {
         this.clock = deps.now ?? (() => Math.floor(Date.now() / 1000))
     }
 
-    /** 全量：过滤群 → upsert → 发下游 → 回写裁决（无群则不调用下游） */
-    syncAll(channelId: string, platform: string, sessions: WeflowSession[]): Promise<void> {
+    /** 全量：过滤群 → upsert → 发下游 → 回写裁决（无群则不调用下游）。返回本轮 0→1 新放行群。 */
+    syncAll(channelId: string, platform: string, sessions: WeflowSession[]): Promise<string[]> {
         const now = this.clock()
         const groups = upsertSeenGroups(this.db, channelId, platform, sessions, now)
-        if (groups.length === 0) return Promise.resolve()
+        if (groups.length === 0) return Promise.resolve([])
 
         const sentIds = groups.map(g => g.username)
         // 群头像来自消息同步侧 chatlab meta.groupAvatar 落库的 chat_group.avatar_url，此处带上推给下游
@@ -74,14 +74,16 @@ export class GroupSyncService {
         }
         return this.downstream.syncGroups(req)
             .then(({ allowed }) => {
-                this.db.chatGroup.markSynced(channelId, sentIds, allowed, this.clock())
-                this.log.info({ sent: sentIds.length, allowed: allowed.length }, '[group-sync] 群同步完成')
+                const newlyAllowed = this.db.chatGroup.markSynced(channelId, sentIds, allowed, this.clock())
+                this.log.info({ sent: sentIds.length, allowed: allowed.length, newlyAllowed: newlyAllowed.length }, '[group-sync] 群同步完成')
+                return newlyAllowed
             })
             .catch((e: unknown) => {
                 const message = e instanceof Error ? e.message : String(e)
                 this.db.chatGroup.markSyncFailed(channelId, sentIds, message, this.clock())
                 this.log.error({ err: message }, '[group-sync] 群同步失败，本轮裁决保持原值')
                 this.alert.send({ level: 'warn', type: 'group_sync_failed', title: '群同步下游失败', message })
+                return []
             })
     }
 }

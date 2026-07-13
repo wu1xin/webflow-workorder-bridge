@@ -60,4 +60,23 @@ describe('GroupSyncService.syncAll', () => {
         expect(db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, 'g1@chatroom')).toBe(true)
         expect(db.chatGroup.listAll(WEFLOW_CHANNEL_ID)[0].syncStatus).toBe('failed')
     })
+
+    it('syncAll 返回本轮新放行群（0→1 边沿）；二次同群不再算边沿', async () => {
+        const service = svc(() => Promise.resolve({ allowed: ['g1@chatroom'] }))
+        const first = await service.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [
+            { username: 'g1@chatroom', type: 2 }, { username: 'g2@chatroom', type: 2 },
+        ])
+        expect(first).toEqual(['g1@chatroom'])
+        const second = await service.syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [{ username: 'g1@chatroom', type: 2 }])
+        expect(second).toEqual([]) // g1 1→1
+    })
+
+    it('syncAll 无群 / 下游失败：返回空数组', async () => {
+        const noGroup = await svc(() => Promise.resolve({ allowed: [] }))
+            .syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [{ username: 'wxid_a', type: 1 }])
+        expect(noGroup).toEqual([])
+        const failed = await svc(() => Promise.reject(new Error('boom')))
+            .syncAll(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, [{ username: 'g@chatroom', type: 2 }])
+        expect(failed).toEqual([])
+    })
 })
