@@ -64,4 +64,18 @@ describe('ChatGroupStore', () => {
         store.markSynced('weflow:a', ['g@chatroom'], ['g@chatroom'], 1)
         expect(store.isPushAllowed('weflow:b', 'g@chatroom')).toBe(false)
     })
+
+    it('markSynced 返回本轮 0→1 边沿：新放行的群，已放行的群不算', () => {
+        store.upsertSeen(CH, PF, 'a@chatroom', {}, 1)
+        store.upsertSeen(CH, PF, 'b@chatroom', {}, 1)
+        store.markSynced(CH, ['a@chatroom'], ['a@chatroom'], 2) // a 先放行
+        const edges = store.markSynced(CH, ['a@chatroom', 'b@chatroom'], ['a@chatroom', 'b@chatroom'], 3)
+        expect(edges).toEqual(['b@chatroom']) // a 是 1→1（不算），b 是 0→1（算）
+    })
+
+    it('markSynced：首次放行未见过裁决的行算 0→1；放行→不放行不算', () => {
+        store.upsertSeen(CH, PF, 'a@chatroom', {}, 1)
+        expect(store.markSynced(CH, ['a@chatroom'], ['a@chatroom'], 2)).toEqual(['a@chatroom']) // 0→1
+        expect(store.markSynced(CH, ['a@chatroom'], [], 3)).toEqual([]) // 1→0，不算
+    })
 })

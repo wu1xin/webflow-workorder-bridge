@@ -99,13 +99,18 @@ export class ChatGroupStore {
         return this.isAllowedStmt.get(channelId, conversationId) !== undefined
     }
 
-    /** 白名单回写：sentIds 中命中 allowedIds 置 1、其余置 0，均标记 synced（单事务） */
-    markSynced(channelId: string, sentIds: string[], allowedIds: string[], now: number): void {
+    /** 白名单回写：sentIds 中命中 allowedIds 置 1、其余置 0，均标记 synced（单事务）。返回本轮 0→1（新放行）的 conversationId。 */
+    markSynced(channelId: string, sentIds: string[], allowedIds: string[], now: number): string[] {
         const allow = new Set(allowedIds)
-        this.db.transaction((ids: string[]) => {
+        return this.db.transaction((ids: string[]) => {
+            const newlyAllowed: string[] = []
             for (const id of ids) {
-                this.setAllowStmt.run({ channelId, conversationId: id, allowed: allow.has(id) ? 1 : 0, now })
+                const willAllow = allow.has(id) ? 1 : 0
+                const prev = this.isAllowedStmt.get(channelId, id) as { push_allowed: number } | undefined
+                if (willAllow === 1 && prev?.push_allowed !== 1) newlyAllowed.push(id) // 0/未知 → 1 为边沿
+                this.setAllowStmt.run({ channelId, conversationId: id, allowed: willAllow, now })
             }
+            return newlyAllowed
         })(sentIds)
     }
 
