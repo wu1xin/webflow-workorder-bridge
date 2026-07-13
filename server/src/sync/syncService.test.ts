@@ -649,6 +649,62 @@ describe('SyncService 放行边沿自动回灌（backfillNewlyAllowed）', () =>
         expect(db.queue.countByStatus('pending')).toBe(3) // 水位下的 a/b + 水位上的 c 全部回灌
     })
 
+    it('端到端横跳：不放行期消息被闸门丢弃，改回放行经 SSE 改名触发 backfill 从水位补回空档，二次横跳不重', async () => {
+        const now = Math.floor(Date.now() / 1000)
+        let available: Array<{ serverId: string, createTime: number, content?: string }> = []
+        const client = {
+            listSessions: () => Promise.resolve([] as WeflowSession[]),
+            fetchMessagesPage: (_t: string, start: number) => Promise.resolve({
+                messages: available.filter(m => m.createTime >= start), hasMore: false,
+            }),
+            fetchMembers: () => Promise.resolve({ groupName: null, groupAvatar: null, members: new Map() }),
+        }
+        let allowNow = true
+        const groupSync = new GroupSyncService({
+            db, downstream: { syncGroups: () => Promise.resolve({ allowed: allowNow ? ['g@chatroom'] : [] }) } as never,
+            log: gsLog, alert: { send() {} }, now: () => 1,
+        })
+        const svc = new SyncService({ ...deps(db, client as never), groupSync })
+
+        // 群已知且放行；放行期 s1 经 SSE 回查入队（水位=now-500）
+        db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, 'g@chatroom', {}, 1)
+        db.chatGroup.markSynced(WEFLOW_CHANNEL_ID, ['g@chatroom'], ['g@chatroom'], 1)
+        available = [{ serverId: 's1', createTime: now - 500, content: 'm1' }]
+        await svc.ingestRealtime(sseEvent('g@chatroom', now - 500))
+        expect(db.queue.countByStatus('pending')).toBe(1)
+
+        // 群名变化致下游改判不放行（这里直接翻转裁决模拟「放行群改名→不放行」的结果；
+        // 该 REST localType 改名链本身已由「系统消息分发」describe 覆盖，本用例聚焦 drop+backfill）
+        allowNow = false
+        db.chatGroup.markSynced(WEFLOW_CHANNEL_ID, ['g@chatroom'], [], 2)
+        expect(db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, 'g@chatroom')).toBe(false)
+
+        // 不放行期：s2/s3 到达 → 闸门 drop（不回查、不入队）
+        available.push(
+            { serverId: 's2', createTime: now - 400, content: 'gap1' },
+            { serverId: 's3', createTime: now - 300, content: 'gap2' },
+        )
+        await svc.ingestRealtime(sseEvent('g@chatroom', now - 400))
+        await svc.ingestRealtime(sseEvent('g@chatroom', now - 300))
+        expect(db.queue.countByStatus('pending')).toBe(1)
+
+        // 群名改回 → 下游改判放行 → SSE 改名分支（已知非放行群 content 匹配）→ onGroupRenamed → 0→1 → backfill 从水位(now-500)补
+        allowNow = true
+        await svc.ingestRealtime(groupSse('g@chatroom', { content: '你修改群名为“原名-001”', ts: now - 250 }))
+        expect(db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, 'g@chatroom')).toBe(true)
+        expect(db.queue.countByStatus('pending')).toBe(3) // s1(dup 不重) + 补回 s2,s3
+
+        // 二次横跳：再不放行 → 期间 s4 drop → 再放行只补 s4，s1/s2/s3 dedup 不重
+        allowNow = false
+        db.chatGroup.markSynced(WEFLOW_CHANNEL_ID, ['g@chatroom'], [], 3)
+        available.push({ serverId: 's4', createTime: now - 100, content: 'gap3' })
+        await svc.ingestRealtime(sseEvent('g@chatroom', now - 100))
+        expect(db.queue.countByStatus('pending')).toBe(3)
+        allowNow = true
+        await svc.ingestRealtime(groupSse('g@chatroom', { content: '你修改群名为“原名-002”', ts: now - 50 }))
+        expect(db.queue.countByStatus('pending')).toBe(4)
+    })
+
     function groupSse(sessionId: string, opts: { content?: string, sessionType?: string, avatarUrl?: string | null, ts?: number } = {}) {
         const { content = 'hi', sessionType = 'group', avatarUrl = null, ts = 100 } = opts
         return { event: 'message.new', data: JSON.stringify({ event: 'message.new', sessionId, sessionType, avatarUrl, content, timestamp: ts }) }
