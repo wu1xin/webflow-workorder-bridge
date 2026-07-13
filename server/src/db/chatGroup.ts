@@ -107,7 +107,7 @@ export class ChatGroupStore {
             for (const id of ids) {
                 const willAllow = allow.has(id) ? 1 : 0
                 const prev = this.isAllowedStmt.get(channelId, id) as { push_allowed: number } | undefined
-                if (willAllow === 1 && prev?.push_allowed !== 1) newlyAllowed.push(id) // 0/未知 → 1 为边沿
+                if (willAllow === 1 && prev?.push_allowed === 0) newlyAllowed.push(id) // 已登记且 0 → 1 才是真放行边沿
                 this.setAllowStmt.run({ channelId, conversationId: id, allowed: willAllow, now })
             }
             return newlyAllowed

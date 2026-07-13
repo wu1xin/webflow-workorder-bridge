@@ -78,4 +78,9 @@ describe('ChatGroupStore', () => {
         expect(store.markSynced(CH, ['a@chatroom'], ['a@chatroom'], 2)).toEqual(['a@chatroom']) // 0→1
         expect(store.markSynced(CH, ['a@chatroom'], [], 3)).toEqual([]) // 1→0，不算
     })
+
+    it('markSynced：从未登记的行不算边沿（避免误报未持久化的放行）', () => {
+        expect(store.markSynced(CH, ['ghost@chatroom'], ['ghost@chatroom'], 1)).toEqual([])
+        expect(store.isPushAllowed(CH, 'ghost@chatroom')).toBe(false)
+    })
 })
