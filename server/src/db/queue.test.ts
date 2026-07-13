@@ -75,6 +75,15 @@ describe('QueueStore', () => {
         expect(store.maxTimestampForConversation('weflow:default', 'g@chatroom')).toBe(300)
         expect(store.maxTimestampForConversation('weflow:default', 'none@chatroom')).toBeNull()
     })
+
+    it('maxTimestampForConversation：全 NULL msg_timestamp 返回 null，且按 channel 隔离', () => {
+        store.enqueue(sample({ conversationId: 'nulls@chatroom', externalId: 'n1', msgTimestamp: null }), 1)
+        store.enqueue(sample({ conversationId: 'nulls@chatroom', externalId: 'n2', msgTimestamp: null }), 2)
+        expect(store.maxTimestampForConversation('weflow:default', 'nulls@chatroom')).toBeNull()
+
+        store.enqueue(sample({ channelId: 'weflow:other', conversationId: 'g@chatroom', externalId: 'o1', msgTimestamp: 500 }), 3)
+        expect(store.maxTimestampForConversation('weflow:default', 'g@chatroom')).toBeNull() // 另一 channel 的不算
+    })
 })
 
 describe('QueueStore.list / getById', () => {
