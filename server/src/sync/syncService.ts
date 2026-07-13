@@ -263,8 +263,12 @@ export class SyncService implements SyncCoordinator {
             const sessions = await client.listSessions()
             this.log.info({ sessions: sessions.length }, '[sync] 列会话完成')
             const newlyAllowed = await this.syncGroups(sessions)
-            // 只挑「放行群 ∩ 起点之后有更新」的会话（FR-REL-03）；缺 lastTimestamp 的保守纳入
+            const newlySet = new Set(newlyAllowed)
+            // 边沿新放行群不走主循环：主循环从全局水位拉会把其 queue 水位顶到 now，
+            // 使随后的 backfill 读到被顶高的水位、漏掉水位以下的空档。交给 backfillNewlyAllowed 从各自旧水位/0 全量补。
+            // 其余「放行群 ∩ 起点之后有更新」的会话照常（FR-REL-03）；缺 lastTimestamp 的保守纳入
             const candidates = this.allowedGroupSessions(sessions)
+                .filter(s => !newlySet.has(s.username))
                 .filter(s => s.lastTimestamp === undefined || s.lastTimestamp >= start)
             this.progress.sessionsTotal = candidates.length
             const watermark = { ts: start, rawid: '' }
@@ -494,6 +498,7 @@ export class SyncService implements SyncCoordinator {
      */
     private onNewGroup(talker: string, avatarUrl: string | null, now: number): Promise<void> {
         this.log.info({ talker }, '[sync] 检测到新入群')
+        // 注意：upsertSeen 必须同步执行（在任何 await 之前）——ingestRealtime 靠它建行后立刻读 isPushAllowed/exists 做路由与防抖
         this.db.chatGroup.upsertSeen(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, talker, { avatarUrl }, now)
         if (!this.groupSync) return Promise.resolve()
         const session: WeflowSession = { username: talker, type: 2 }

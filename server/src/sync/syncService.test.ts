@@ -623,6 +623,32 @@ describe('SyncService 放行边沿自动回灌（backfillNewlyAllowed）', () =>
         expect(items.every(i => i.ingestPath === 'sse')).toBe(true)
     })
 
+    it('补偿路径：新放行群在全局水位之下的历史也被回灌（不被主循环顶高水位吞掉）', async () => {
+        const now = Math.floor(Date.now() / 1000)
+        db.channelState.advanceWatermark(WEFLOW_CHANNEL_ID, WEFLOW_PLATFORM, now - 100, '', 1) // 全局水位
+        const all = { 'proj@chatroom': [
+            { serverId: 's-a', createTime: now - 300, content: 'a' }, // 水位下
+            { serverId: 's-b', createTime: now - 200, content: 'b' }, // 水位下
+            { serverId: 's-c', createTime: now - 50, content: 'c' },  // 水位上
+        ] }
+        const client = {
+            listSessions: () => Promise.resolve([{ username: 'proj@chatroom', type: 2, lastTimestamp: now - 50 }] as WeflowSession[]),
+            fetchMessagesPage: (talker: string, start: number) => Promise.resolve({
+                messages: (all[talker as keyof typeof all] ?? []).filter(m => m.createTime >= start), hasMore: false,
+            }),
+            fetchMembers: () => Promise.resolve({ groupName: null, groupAvatar: null, members: new Map() }),
+        }
+        const groupSync = new GroupSyncService({
+            db, downstream: { syncGroups: () => Promise.resolve({ allowed: ['proj@chatroom'] }) } as never,
+            log: gsLog, alert: { send() {} }, now: () => 1,
+        })
+        const svc = new SyncService({ ...deps(db, client as never), groupSync })
+
+        await svc.runCompensation()
+
+        expect(db.queue.countByStatus('pending')).toBe(3) // 水位下的 a/b + 水位上的 c 全部回灌
+    })
+
     function groupSse(sessionId: string, opts: { content?: string, sessionType?: string, avatarUrl?: string | null, ts?: number } = {}) {
         const { content = 'hi', sessionType = 'group', avatarUrl = null, ts = 100 } = opts
         return { event: 'message.new', data: JSON.stringify({ event: 'message.new', sessionId, sessionType, avatarUrl, content, timestamp: ts }) }
