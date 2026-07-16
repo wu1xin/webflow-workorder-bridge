@@ -18,4 +18,16 @@ describe('DedupStore', () => {
         expect(store.markIfNew('weflow:default', 'k1', 1000)).toBe(true)
         expect(store.markIfNew('telegram:bot-a', 'k1', 1000)).toBe(true)
     })
+
+    it('deleteByChannel 清空本 channel 全部 dedup、隔离其他 channel，返回删除行数', () => {
+        store.markIfNew('weflow:default', 'k1', 1000)
+        store.markIfNew('weflow:default', 'k2', 1000)
+        store.markIfNew('telegram:bot-a', 'k1', 1000)
+
+        expect(store.deleteByChannel('weflow:default')).toBe(2)
+        // 清空后同 key 可再次首次出现
+        expect(store.markIfNew('weflow:default', 'k1', 2000)).toBe(true)
+        // 其他 channel 不受影响：仍是重复
+        expect(store.markIfNew('telegram:bot-a', 'k1', 2000)).toBe(false)
+    })
 })

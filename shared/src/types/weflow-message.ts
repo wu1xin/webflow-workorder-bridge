@@ -1,5 +1,6 @@
 // WeFlow 消息列表 DTO（前后端共用）。
 // 数据源 queue 表（归一化入队的转发消息）；列表行不含 rawJson（大 blob 不批量下发），详情才返回。
+// text/isSystem 由服务端从 raw_json 派生下发（短字段，非整包）。
 
 /** 转发队列状态机 */
 export type WeflowMessageStatus = 'pending' | 'sending' | 'done' | 'dead'
@@ -15,6 +16,10 @@ export interface WeflowMessageSummary {
     senderId: string | null
     /** 归一化事件类型 */
     eventType: string
+    /** 消息正文（原样取上游 content；媒体为占位符如 [图片]，空为 ''） */
+    text: string
+    /** 是否系统消息（localType===10000：撤回/群改名/入群提示等） */
+    isSystem: boolean
     /** 消息秒级时间戳 */
     msgTimestamp: number | null
     /** 是否含媒体 */

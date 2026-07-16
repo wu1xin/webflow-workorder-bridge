@@ -103,6 +103,23 @@
                 show-overflow-tooltip
             />
             <ElTableColumn
+                label="内容"
+                min-width="220"
+                show-overflow-tooltip
+            >
+                <template #default="{ row }">
+                    <ElTag
+                        v-if="row.isSystem"
+                        size="small"
+                        type="info"
+                        class="messages-sys-tag"
+                    >
+                        系统
+                    </ElTag>
+                    <span>{{ row.text || '—' }}</span>
+                </template>
+            </ElTableColumn>
+            <ElTableColumn
                 prop="eventType"
                 label="类型"
                 width="130"
@@ -198,6 +215,7 @@
 <script setup lang="ts">
 import { ApiError } from '@/api/http'
 import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { fetchGroups } from '@/api/groups'
 import { fetchMessages, fetchMessageDetail, type MessageQuery } from '@/api/messages'
 import { forceFullResync } from '@/api/sync'
@@ -215,6 +233,8 @@ const STATUS_OPTIONS: { value: WeflowMessageStatus, label: string }[] = [
 const STATUS_TAG: Record<WeflowMessageStatus, TagType> = {
     pending: 'warning', sending: 'primary', done: 'success', dead: 'danger',
 }
+
+const route = useRoute()
 
 const messages = ref<WeflowMessageSummary[]>([])
 const total = ref(0)
@@ -340,6 +360,9 @@ function onClickDetail(id: number): void {
 }
 
 onMounted(() => {
+    // 从群组页跳转带来的会话筛选（?conversationId=xxx）
+    const convId = route.query.conversationId
+    if (typeof convId === 'string' && convId) conversationId.value = convId
     loadGroups()
     load()
 })
@@ -364,6 +387,9 @@ onMounted(() => {
 }
 .messages-filter-conv {
     width: 200px;
+}
+.messages-sys-tag {
+    margin-right: 4px;
 }
 .messages-pager {
     display: flex;

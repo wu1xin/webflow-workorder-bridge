@@ -171,6 +171,59 @@ describe('QueueStore.list / getById', () => {
         expect(store.getById(CH, 999)).toBeNull()
         expect(store.getById('weflow:other', 1)).toBeNull()
     })
+
+    it('list：按消息发送时间倒序（非入队 id）——catchup 补的旧消息排在后', () => {
+        store.enqueue(sample({ externalId: 'a', msgTimestamp: 200 }), 1)
+        store.enqueue(sample({ externalId: 'b', msgTimestamp: 100 }), 2) // 后入队但发送更早
+        store.enqueue(sample({ externalId: 'c', msgTimestamp: 300 }), 3)
+        expect(store.list(CH, {}, 20, 0).items.map(m => m.msgTimestamp)).toEqual([300, 200, 100])
+    })
+
+    it('list：同一发送秒内按 sortSeq 倒序（毫秒序修正 id 兜底的错序）', () => {
+        // 用户实测：两条 createTime 同为 1783665961，仅 sortSeq 区分先后。
+        // 故意让入队 id 顺序与 sortSeq 相反：较晚(sortSeq …001)先入队，较早(…000)后入队——
+        // 纯 id 兜底会得 ['入群','1']（错），按 sortSeq 应得 ['1','入群']。
+        store.enqueue(sample({ externalId: 'later', msgTimestamp: 1783665961, rawJson: JSON.stringify({ content: '1', localType: 1, sortSeq: 1783665961001 }) }), 1)
+        store.enqueue(sample({ externalId: 'earlier', msgTimestamp: 1783665961, rawJson: JSON.stringify({ content: '“无心”邀请你加入了群聊', localType: 10000, sortSeq: 1783665961000 }) }), 2)
+        expect(store.list(CH, {}, 20, 0).items.map(m => m.text)).toEqual(['1', '“无心”邀请你加入了群聊'])
+    })
+
+    it('list：同一发送时间且无 sortSeq 时按 id 倒序兜底（稳定分页）', () => {
+        store.enqueue(sample({ externalId: 'a', msgTimestamp: 100 }), 1)
+        store.enqueue(sample({ externalId: 'b', msgTimestamp: 100 }), 2)
+        expect(store.list(CH, {}, 20, 0).items.map(m => m.id)).toEqual([2, 1])
+    })
+
+    it('list：msg_timestamp 为 null 排最后', () => {
+        store.enqueue(sample({ externalId: 'a', msgTimestamp: 100 }), 1)
+        store.enqueue(sample({ externalId: 'b', msgTimestamp: null }), 2)
+        store.enqueue(sample({ externalId: 'c', msgTimestamp: 200 }), 3)
+        expect(store.list(CH, {}, 20, 0).items.map(m => m.msgTimestamp)).toEqual([200, 100, null])
+    })
+
+    it('list：从 raw_json 派生 text（原样取 content）+ 非系统', () => {
+        store.enqueue(sample({ rawJson: JSON.stringify({ content: 'hi', localType: 1 }) }), 1)
+        const m = store.list(CH, {}, 20, 0).items[0]
+        expect(m.text).toBe('hi')
+        expect(m.isSystem).toBe(false)
+    })
+
+    it('list：系统消息 localType 10000 → isSystem=true', () => {
+        store.enqueue(sample({ rawJson: JSON.stringify({ content: '你修改群名为“X”', localType: 10000 }) }), 1)
+        const m = store.list(CH, {}, 20, 0).items[0]
+        expect(m.isSystem).toBe(true)
+        expect(m.text).toBe('你修改群名为“X”')
+    })
+
+    it('list：缺 content / 非法 JSON → text=\'\'、isSystem=false（降级不抛）', () => {
+        store.enqueue(sample({ rawJson: JSON.stringify({ localType: 3 }) }), 1)
+        store.enqueue(sample({ externalId: 'srv-2', rawJson: 'not-json' }), 2)
+        const items = store.list(CH, {}, 20, 0).items
+        for (const m of items) {
+            expect(m.text).toBe('')
+            expect(m.isSystem).toBe(false)
+        }
+    })
 })
 
 describe('QueueStore — 撤回看守 revocable_until', () => {
@@ -330,5 +383,44 @@ describe('QueueStore worker 方法', () => {
         expect(d.attempts).toBe(0)
         expect(d.lastError).toBeNull()
         expect(store.retryDead(CH, c.id, 5000)).toBe(false)
+    })
+})
+
+describe('QueueStore 清空重拉删除', () => {
+    let db: BetterSqlite3.Database
+    let store: QueueStore
+    beforeEach(() => { db = new BetterSqlite3(':memory:'); migrate(db); store = new QueueStore(db) })
+    afterEach(() => db.close())
+
+    it('deleteByConversation 只删指定群、跨会话隔离，返回删除行数', () => {
+        store.enqueue(sample({ conversationId: 'a@chatroom', externalId: 's1' }), 1)
+        store.enqueue(sample({ conversationId: 'a@chatroom', externalId: 's2' }), 2)
+        store.enqueue(sample({ conversationId: 'b@chatroom', externalId: 's3' }), 3)
+
+        expect(store.deleteByConversation('weflow:default', 'a@chatroom')).toBe(2)
+        expect(store.list('weflow:default', {}, 20, 0).items.map(m => m.conversationId)).toEqual(['b@chatroom'])
+    })
+
+    it('deleteByConversation 按 channel 隔离，另一 channel 同名群不受影响', () => {
+        store.enqueue(sample({ conversationId: 'a@chatroom', externalId: 's1' }), 1)
+        store.enqueue(sample({ channelId: 'weflow:other', conversationId: 'a@chatroom', externalId: 's2' }), 2)
+
+        expect(store.deleteByConversation('weflow:default', 'a@chatroom')).toBe(1)
+        expect(store.list('weflow:other', { conversationId: 'a@chatroom' }, 20, 0).total).toBe(1)
+    })
+
+    it('deleteByConversation 无匹配返回 0', () => {
+        store.enqueue(sample({ conversationId: 'a@chatroom' }), 1)
+        expect(store.deleteByConversation('weflow:default', 'none@chatroom')).toBe(0)
+    })
+
+    it('deleteByChannel 清空本 channel 全部、隔离其他 channel，返回删除行数', () => {
+        store.enqueue(sample({ conversationId: 'a@chatroom', externalId: 's1' }), 1)
+        store.enqueue(sample({ conversationId: 'b@chatroom', externalId: 's2' }), 2)
+        store.enqueue(sample({ channelId: 'weflow:other', conversationId: 'c@chatroom', externalId: 's3' }), 3)
+
+        expect(store.deleteByChannel('weflow:default')).toBe(2)
+        expect(store.list('weflow:default', {}, 20, 0).total).toBe(0)
+        expect(store.list('weflow:other', {}, 20, 0).total).toBe(1)
     })
 })

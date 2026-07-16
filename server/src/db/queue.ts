@@ -70,12 +70,13 @@ export interface QueueListFilter {
     ingestPath?: WeflowIngestPath | null
 }
 
-/** 列表行（不含 raw_json）的库内表示 */
+/** 列表行的库内表示（含 raw_json：仅用于服务端派生 text/isSystem，不整包下发） */
 interface SummaryRow {
     id: number
     conversation_id: string | null
     sender_id: string | null
     event_type: string
+    raw_json: string
     msg_timestamp: number | null
     has_media: number
     status: WeflowMessageStatus
@@ -83,6 +84,22 @@ interface SummaryRow {
     attempts: number
     last_error: string | null
     created_at: number
+}
+
+/** 微信系统消息 localType（撤回/群改名/入群提示等恒为此小整数） */
+const SYSTEM_LOCAL_TYPE = 10000
+
+/** 从原始整包派生列表展示字段：正文 text（原样取 content）+ 是否系统消息。解析失败降级为空文本/非系统。 */
+function deriveDisplay(rawJson: string): { text: string, isSystem: boolean } {
+    try {
+        const m = JSON.parse(rawJson) as { content?: unknown, localType?: unknown }
+        return {
+            text: typeof m.content === 'string' ? m.content : '',
+            isSystem: m.localType === SYSTEM_LOCAL_TYPE,
+        }
+    } catch {
+        return { text: '', isSystem: false }
+    }
 }
 
 /** 列表共用的可选过滤 WHERE（占位 @x 为 null 时该条不生效） */
@@ -93,15 +110,18 @@ const FILTER_WHERE = `
     AND (@hasMedia       IS NULL OR has_media        = @hasMedia)
     AND (@ingestPath     IS NULL OR ingest_path      = @ingestPath)`
 
-const SUMMARY_COLS = `id, conversation_id, sender_id, event_type, msg_timestamp,
+const SUMMARY_COLS = `id, conversation_id, sender_id, event_type, raw_json, msg_timestamp,
     has_media, status, ingest_path, attempts, last_error, created_at`
 
 function toSummary(r: SummaryRow): WeflowMessageSummary {
+    const { text, isSystem } = deriveDisplay(r.raw_json)
     return {
         id: r.id,
         conversationId: r.conversation_id,
         senderId: r.sender_id,
         eventType: r.event_type,
+        text,
+        isSystem,
         msgTimestamp: r.msg_timestamp,
         hasMedia: r.has_media === 1,
         status: r.status,
@@ -131,6 +151,8 @@ export class QueueStore {
     private readonly resetStuckStmt: BetterSqlite3.Statement
     private readonly retryDeadStmt: BetterSqlite3.Statement
     private readonly maxTsStmt: BetterSqlite3.Statement
+    private readonly deleteByConvStmt: BetterSqlite3.Statement
+    private readonly deleteByChannelStmt: BetterSqlite3.Statement
 
     constructor(db: BetterSqlite3.Database) {
         this.db = db
@@ -148,11 +170,16 @@ export class QueueStore {
             )
         `)
         this.countStmt = db.prepare('SELECT COUNT(*) AS c FROM queue WHERE status = ?')
-        // 可选过滤 + 分页：最新入队在前
+        // 可选过滤 + 分页：按消息发送时间倒序。msg_timestamp 仅秒级，同秒多条（如入群提示与紧随的正文）
+        // 再按 raw_json.sortSeq（≈createTime*1000+序号，毫秒序）精确定先后，最后 id 兜底保证分页稳定。
+        // json_valid 守卫：脏行（raw_json 非法 JSON）返回 NULL 落到 id 兜底，避免 json_extract 抛错拖垮整条查询；
+        // sortSeq 缺失同理为 NULL，DESC 下仅落到同秒组末尾（非整表末尾），不影响时间主序。
         this.listStmt = db.prepare(`
             SELECT ${SUMMARY_COLS} FROM queue
             WHERE ${FILTER_WHERE}
-            ORDER BY id DESC
+            ORDER BY msg_timestamp DESC,
+              (CASE WHEN json_valid(raw_json) THEN json_extract(raw_json, '$.sortSeq') END) DESC,
+              id DESC
             LIMIT @limit OFFSET @offset
         `)
         this.listCountStmt = db.prepare(`SELECT COUNT(*) AS c FROM queue WHERE ${FILTER_WHERE}`)
@@ -215,6 +242,9 @@ export class QueueStore {
         this.maxTsStmt = db.prepare(
             'SELECT MAX(msg_timestamp) AS ts FROM queue WHERE channel_id = ? AND conversation_id = ?',
         )
+        // 清空重拉：按群/按 channel 删 queue 行（见 2026-07-15-群消息清空重拉同步-design.md §3.2）
+        this.deleteByConvStmt = db.prepare('DELETE FROM queue WHERE channel_id = ? AND conversation_id = ?')
+        this.deleteByChannelStmt = db.prepare('DELETE FROM queue WHERE channel_id = ?')
     }
 
     /** 入队一条 pending 消息 */
@@ -273,7 +303,6 @@ export class QueueStore {
     /** 单条详情（含 raw_json/media_json）；不存在或跨 channel 返回 null */
     getById(channelId: string, id: number): WeflowMessageDetail | null {
         const r = this.getByIdStmt.get(channelId, id) as (SummaryRow & {
-            raw_json: string
             media_json: string | null
         }) | undefined
         if (!r) return null
@@ -334,5 +363,15 @@ export class QueueStore {
     /** 死信重投：dead → pending 并清计数/错误；非 dead 不动，返回是否命中 */
     retryDead(channelId: string, id: number, now: number): boolean {
         return this.retryDeadStmt.run({ channelId, id, now }).changes > 0
+    }
+
+    /** 清空重拉：删某会话在本 channel 的全部 queue 行，返回删除行数 */
+    deleteByConversation(channelId: string, conversationId: string): number {
+        return this.deleteByConvStmt.run(channelId, conversationId).changes
+    }
+
+    /** 清空重拉：删本 channel 的全部 queue 行，返回删除行数 */
+    deleteByChannel(channelId: string): number {
+        return this.deleteByChannelStmt.run(channelId).changes
     }
 }

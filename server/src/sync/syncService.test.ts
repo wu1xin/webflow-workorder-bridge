@@ -809,15 +809,166 @@ describe('SyncService 撤回检测（revocable_until 看守 + 对账扫描）', 
         expect(db.queue.getById(WEFLOW_CHANNEL_ID, ev[0].id)?.rawJson).toContain('f1')
     })
 
-    it('ingestOne 跳过撤回行：撤回 sysmsg 不会被当普通消息入队', async () => {
+    it('历史撤回行（serverId 从未入库）→ 作为系统消息入队（message.new + 撤回文案），不建撤回看守', async () => {
         const NOW = Math.floor(Date.now() / 1000)
         allowGroup(db, 'g@chatroom')
-        // 回查只返回一条「从未见过的 serverId 的撤回行」（模拟全量拉到历史撤回）
+        // 回查只返回一条「从未见过的 serverId 的撤回行」（模拟全量/重拉拉到历史撤回，原文 REST 已不返回）
         const client = stubClient([], { 'g@chatroom': { messages: [revokeRow('hist', NOW)], hasMore: false } })
         const svc = new SyncService(deps(db, client))
 
         await svc.ingestRealtime(sseEvent('g@chatroom', NOW))
 
-        expect(db.queue.countByStatus('pending')).toBe(0)
+        expect(db.queue.countByStatus('pending')).toBe(1)
+        const item = db.queue.list(WEFLOW_CHANNEL_ID, {}, 20, 0).items[0]
+        expect(item.eventType).toBe('message.new')
+        expect(db.queue.getById(WEFLOW_CHANNEL_ID, item.id)?.rawJson).toContain('撤回了一条消息')
+        // 系统消息不建看守（computeRevocableUntil 对 localType 10000 返回 null）
+        expect(db.queue.listOpenRevokeWatches(WEFLOW_CHANNEL_ID, 0)).toEqual([])
+    })
+
+    it('原消息已入库（serverId 已在 dedup）→ 再拉到其撤回行不重复入队', async () => {
+        const NOW = Math.floor(Date.now() / 1000)
+        allowGroup(db, 'g@chatroom')
+        const pages: Record<string, MessagesPage> = {
+            'g@chatroom': { messages: [{ serverId: 's1', createTime: NOW, content: 'hello' }], hasMore: false },
+        }
+        const client = stubClient([], pages)
+        const svc = new SyncService(deps(db, client))
+
+        await svc.ingestRealtime(sseEvent('g@chatroom', NOW))
+        expect(db.queue.countByStatus('pending')).toBe(1) // 原消息 message.new
+
+        // 原消息被撤回：同 serverId 那行原地翻成撤回态
+        pages['g@chatroom'] = { messages: [revokeRow('s1', NOW)], hasMore: false }
+        await svc.ingestRealtime(sseEvent('g@chatroom', NOW + 1))
+
+        expect(db.queue.countByStatus('pending')).toBe(1) // 撤回行撞 dedup(s1)，不重复入队
+    })
+
+    it('清空重拉：重拉到该群仅剩的撤回行时，作为系统消息补回入队', async () => {
+        const NOW = Math.floor(Date.now() / 1000)
+        allowGroup(db, 'g@chatroom')
+        const client = stubClient([], { 'g@chatroom': { messages: [revokeRow('gone', NOW)], hasMore: false } })
+        const svc = new SyncService(deps(db, client))
+
+        const res = svc.resetGroup('g@chatroom')
+        expect(res.accepted).toBe(true)
+
+        await vi.waitFor(() => expect(db.queue.countByStatus('pending')).toBe(1))
+        expect(db.queue.list(WEFLOW_CHANNEL_ID, {}, 20, 0).items[0].eventType).toBe('message.new')
+    })
+})
+
+describe('SyncService.resetGroup（单群清空重拉）', () => {
+    let db: Db
+    beforeEach(() => { db = Db.openMemory() })
+    afterEach(() => db.close())
+
+    it('非忙：清空该群 queue+dedup 并从 0 定向重拉（dedup 已清 → 真重新入队），保留 push_allowed', async () => {
+        allowGroup(db, 'proj@chatroom')
+        const client = stubClient(
+            [{ username: 'proj@chatroom', type: 2 }],
+            { 'proj@chatroom': { messages: [
+                { serverId: 's1', createTime: 100, content: 'a' },
+                { serverId: 's2', createTime: 200, content: 'b' },
+            ], hasMore: false } },
+        )
+        const svc = new SyncService(deps(db, client))
+        await svc.runFullSync()
+        expect(db.queue.countByStatus('pending')).toBe(2)
+
+        // 复用现成单群回拉链，起点必须为 0
+        const spy = vi.spyOn(svc as never, 'scheduleRealtimePull')
+        const res = svc.resetGroup('proj@chatroom')
+
+        expect(res.accepted).toBe(true)
+        expect(spy).toHaveBeenCalledWith('proj@chatroom', 0)
+        // 删除是同步的、重拉是异步的：返回后该群 queue 已清空
+        expect(db.queue.list(WEFLOW_CHANNEL_ID, { conversationId: 'proj@chatroom' }, 20, 0).total).toBe(0)
+
+        // 重拉完成后真重新入队（dedup 已清，未被挡）
+        await vi.waitFor(() => expect(db.queue.countByStatus('pending')).toBe(2))
+        // 保留放行裁决
+        expect(db.chatGroup.listAllowed(WEFLOW_CHANNEL_ID)).toContain('proj@chatroom')
+    })
+
+    it('已有同步在跑：accepted=false 且不删数据', async () => {
+        allowGroup(db, 'proj@chatroom')
+        // 预置该群一条 queue + dedup，随后应保持不变
+        db.queue.enqueue({
+            channelId: WEFLOW_CHANNEL_ID, platform: WEFLOW_PLATFORM, eventType: 'message.new',
+            externalId: 'srv-1', conversationId: 'proj@chatroom', senderId: null, senderName: null, senderAvatar: null,
+            msgTimestamp: 100, hasMedia: 0, rawJson: '{}', mediaJson: null, ingestPath: 'catchup', revocableUntil: null,
+        }, 1)
+        db.dedup.markIfNew(WEFLOW_CHANNEL_ID, 'srv-1', 1)
+
+        let release = () => {}
+        const gate = new Promise<void>((r) => { release = r })
+        const client = {
+            listSessions: () => gate.then(() => [{ username: 'proj@chatroom', type: 2 }] as WeflowSession[]),
+            fetchMessagesPage: () => Promise.resolve({ messages: [], hasMore: false }),
+        }
+        const svc = new SyncService(deps(db, client as never))
+        expect(svc.triggerFullSync().accepted).toBe(true)
+
+        expect(svc.resetGroup('proj@chatroom').accepted).toBe(false)
+        expect(db.queue.list(WEFLOW_CHANNEL_ID, { conversationId: 'proj@chatroom' }, 20, 0).total).toBe(1)
+        expect(db.dedup.markIfNew(WEFLOW_CHANNEL_ID, 'srv-1', 2)).toBe(false) // dedup 未被清
+
+        release()
+        await vi.waitFor(() => expect(svc.getStatus().running).toBe(false))
+    })
+})
+
+describe('SyncService.resetAllAndFullSync（全部清空重拉）', () => {
+    let db: Db
+    beforeEach(() => { db = Db.openMemory() })
+    afterEach(() => db.close())
+
+    it('非忙：清空整 channel 后全量重灌（dedup 已清 → 原样重新入队）', async () => {
+        allowGroup(db, 'proj@chatroom')
+        const client = stubClient(
+            [{ username: 'proj@chatroom', type: 2 }],
+            { 'proj@chatroom': { messages: [
+                { serverId: 's1', createTime: 100, content: 'a' },
+                { serverId: 's2', createTime: 200, content: 'b' },
+            ], hasMore: false } },
+        )
+        const svc = new SyncService(deps(db, client))
+        await svc.runFullSync()
+        expect(db.queue.countByStatus('pending')).toBe(2)
+
+        const res = svc.resetAllAndFullSync()
+        expect(res.accepted).toBe(true)
+        expect(res.status.running).toBe(true)
+        expect(res.status.mode).toBe('full')
+
+        await vi.waitFor(() => expect(svc.getStatus().running).toBe(false))
+        // 若 dedup 未清，重灌会被去重挡成 0；这里应仍为 2 → 证明清空生效（原 2 行已删、重新入队 2 行）
+        expect(db.queue.countByStatus('pending')).toBe(2)
+    })
+
+    it('已有同步在跑：accepted=false 且不清数据', async () => {
+        allowGroup(db, 'proj@chatroom')
+        db.queue.enqueue({
+            channelId: WEFLOW_CHANNEL_ID, platform: WEFLOW_PLATFORM, eventType: 'message.new',
+            externalId: 'srv-1', conversationId: 'proj@chatroom', senderId: null, senderName: null, senderAvatar: null,
+            msgTimestamp: 100, hasMedia: 0, rawJson: '{}', mediaJson: null, ingestPath: 'catchup', revocableUntil: null,
+        }, 1)
+
+        let release = () => {}
+        const gate = new Promise<void>((r) => { release = r })
+        const client = {
+            listSessions: () => gate.then(() => [] as WeflowSession[]),
+            fetchMessagesPage: () => Promise.resolve({ messages: [], hasMore: false }),
+        }
+        const svc = new SyncService(deps(db, client as never))
+        expect(svc.triggerFullSync().accepted).toBe(true)
+
+        expect(svc.resetAllAndFullSync().accepted).toBe(false)
+        expect(db.queue.countByStatus('pending')).toBe(1) // 未清
+
+        release()
+        await vi.waitFor(() => expect(svc.getStatus().running).toBe(false))
     })
 })

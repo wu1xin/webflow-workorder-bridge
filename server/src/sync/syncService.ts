@@ -184,6 +184,36 @@ export class SyncService implements SyncCoordinator {
     }
 
     /**
+     * 单群「清空重拉」（POST /api/weflow/groups/:id/reset，开发/测试用）：
+     * 删该群 queue 行 + 对应 dedup 痕迹，再从 0 定向重拉（复用 scheduleRealtimePull：单群、
+     * 合并防抖、尊重放行闸门、不碰全局水位）。保留 push_allowed。重拉 fire-and-forget，不等完成。
+     * 见 2026-07-15-群消息清空重拉同步-design.md §3.4。
+     * @returns accepted=false 表示有全量/补偿同步在跑（防并发），未做任何删除。
+     */
+    resetGroup(conversationId: string): { accepted: boolean, status: SyncProgress } {
+        if (this.progress.running) {
+            return { accepted: false, status: this.getStatus() }
+        }
+        this.db.resetConversation(WEFLOW_CHANNEL_ID, conversationId)
+        void this.scheduleRealtimePull(conversationId, 0)
+        return { accepted: true, status: this.getStatus() }
+    }
+
+    /**
+     * 全部「清空重拉」（POST /api/weflow/groups/reset-all，开发/测试用）：
+     * 清空本 channel 整张 queue + dedup + 重置水位/断点，再触发全量重拉（dedup 已空 → 真重灌）。
+     * @returns accepted=false 表示有全量/补偿同步在跑（防并发），未做任何清空。
+     */
+    resetAllAndFullSync(): { accepted: boolean, status: SyncProgress } {
+        if (this.progress.running) {
+            return { accepted: false, status: this.getStatus() }
+        }
+        this.db.resetChannel(WEFLOW_CHANNEL_ID)
+        void this.runFullSync()
+        return { accepted: true, status: this.getStatus() }
+    }
+
+    /**
      * 手动「立即同步群」（POST /api/weflow/groups/sync）：拉会话 → 群同步/入库 → 回报群总数/放行数。
      * 复用 runFullSync 的 listSessions→syncGroups 段；与消息同步不互斥（群同步幂等、轻量），
      * 仅用 groupSyncing 防自身重入。下游失败由 syncAll 内部吞掉并标 failed，调用方重拉列表看各行状态。
@@ -387,9 +417,11 @@ export class SyncService implements SyncCoordinator {
         members: Map<string, MemberInfo> = new Map(),
     ): { status: 'enqueued' | 'duplicate' | 'skipped', normalized: NormalizedMessage } {
         const n = this.adapter.normalize({ talker, message: msg })
-        // 撤回行（原地改写、serverId 同原消息）不是新消息：不当普通消息入队。
-        // 撤回事件的产出由 reconcileRevokes 按 revocable_until 看守驱动（绕开本函数的 serverId 去重）。
-        if (isRevokeRow(msg)) return { status: 'skipped', normalized: n }
+        // 撤回行（原地改写、serverId 同原消息）照常走去重/入队：
+        //   - 原消息活着时已入库 → serverId 已在 dedup → 命中 duplicate、不重复入队；撤回通知由 reconcileRevokes 产出。
+        //   - 原消息从未入库（历史撤回 / 清空重拉后原文 REST 已不返回）→ serverId 首见 → 作为系统消息入队，
+        //     让下游至少看到「这里有条消息被撤回」（见 2026-07-15-群消息清空重拉同步-design.md §7）。
+        // 系统消息 localType 10000 → computeRevocableUntil 返回 null，入队后不建撤回看守。
         if (!n.dedupKey) return { status: 'skipped', normalized: n }
         // 仅群聊转发闸门：未放行群（或无 conversationId）一律不入队（与会话级过滤双保险）
         if (n.conversationId === null || !this.db.chatGroup.isPushAllowed(WEFLOW_CHANNEL_ID, n.conversationId)) {

@@ -64,4 +64,24 @@ describe('ChannelStateStore', () => {
         expect(s?.lastSyncTimestamp).toBe(500)
         expect(s?.breakpointTimestamp).toBe(100)
     })
+
+    it('resetWatermark 清空水位与断点，保留 install_time', () => {
+        store.markInstalled(CH, PLATFORM, 1000)
+        store.advanceWatermark(CH, PLATFORM, 500, 'w', 2)
+        store.advanceBreakpoint(CH, PLATFORM, 300, 'b', 3)
+
+        store.resetWatermark(CH)
+
+        const s = store.get(CH)
+        expect(s?.lastSyncTimestamp).toBeNull()
+        expect(s?.lastSyncRawid).toBeNull()
+        expect(s?.breakpointTimestamp).toBeNull()
+        expect(s?.breakpointRawid).toBeNull()
+        expect(s?.installTime).toBe(1000) // 保留：不被误判成首装
+    })
+
+    it('resetWatermark 对不存在的行是无害空操作', () => {
+        store.resetWatermark(CH)
+        expect(store.get(CH)).toBeNull()
+    })
 })

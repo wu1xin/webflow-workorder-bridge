@@ -27,6 +27,7 @@ export class ChannelStateStore {
     private readonly installStmt: BetterSqlite3.Statement
     private readonly watermarkStmt: BetterSqlite3.Statement
     private readonly breakpointStmt: BetterSqlite3.Statement
+    private readonly resetWatermarkStmt: BetterSqlite3.Statement
 
     constructor(db: BetterSqlite3.Database) {
         this.getStmt = db.prepare(
@@ -55,6 +56,13 @@ export class ChannelStateStore {
               breakpoint_timestamp = @ts,
               breakpoint_rawid     = @rawid,
               updated_at           = @now
+        `)
+        // 清空重拉：把水位/断点全置 NULL，保留 install_time（见 2026-07-15-群消息清空重拉同步-design.md §3.2）
+        this.resetWatermarkStmt = db.prepare(`
+            UPDATE channel_state SET
+              last_sync_timestamp  = NULL, last_sync_rawid  = NULL,
+              breakpoint_timestamp = NULL, breakpoint_rawid = NULL
+            WHERE channel_id = ?
         `)
     }
 
@@ -97,5 +105,10 @@ export class ChannelStateStore {
         if (ts > current) {
             this.breakpointStmt.run({ channelId, platform, ts, rawid, now })
         }
+    }
+
+    /** 清空重拉：把同步水位与投递断点全置 NULL，保留 install_time（避免被误判成首装） */
+    resetWatermark(channelId: string): void {
+        this.resetWatermarkStmt.run(channelId)
     }
 }
