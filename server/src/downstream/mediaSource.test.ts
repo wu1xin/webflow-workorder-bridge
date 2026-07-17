@@ -11,6 +11,12 @@ function fileRaw(title: string, totallen: number): string {
         + `<appattach><totallen>${totallen}</totallen><fileext>epub</fileext></appattach></appmsg></msg>`
 }
 
+// 真实线上形态：title/totallen 的值被 <![CDATA[...]]> 包裹（企微 openim 文件消息实测如此）
+function fileRawCdata(title: string, totallen: number): string {
+    return `x@openim:\n<msg><appmsg><title><![CDATA[${title}]]></title><type>6</type>`
+        + `<appattach><totallen><![CDATA[${totallen}]]></totallen><fileext><![CDATA[xlsx]]></fileext></appattach></appmsg></msg>`
+}
+
 describe('fileMonthFolder', () => {
     it('按本地时区把 createTime 折成 YYYY-MM', () => {
         const d = new Date(2026, 6, 9, 12, 0, 0) // 本地 2026-07
@@ -76,6 +82,19 @@ describe('resolveMediaSource — 文件（fileBaseDir + 月份 + title，size==t
     it('未配置 fileBaseDir → unsupported', () => {
         const msg: WeflowMessage = { localType: 25769803825, createTime: create, rawContent: fileRaw('x.epub', 12) }
         expect(resolveMediaSource(msg, {}).status).toBe('unsupported')
+    })
+
+    it('CDATA 包裹的 title/totallen（真实线上形态）→ 剥壳后按文件名命中 → ready', () => {
+        putFile(month, '工作簿1.xlsx', 'hello world!') // 12 字节
+        const msg: WeflowMessage = { localType: 25769803825, createTime: create, rawContent: fileRawCdata('工作簿1.xlsx', 12) }
+        const r = resolveMediaSource(msg, { fileBaseDir: base })
+        expect(r).toEqual({ status: 'ready', absPath: join(base, month, '工作簿1.xlsx'), fileName: '工作簿1.xlsx', mediaType: 'file' })
+    })
+
+    it('CDATA 包裹的 totallen 也参与完整性校验：size != totallen → waiting', () => {
+        putFile(month, '工作簿1.xlsx', 'half') // 4 字节 ≠ 12
+        const msg: WeflowMessage = { localType: 25769803825, createTime: create, rawContent: fileRawCdata('工作簿1.xlsx', 12) }
+        expect(resolveMediaSource(msg, { fileBaseDir: base }).status).toBe('waiting')
     })
 
     it('主路径未命中，回退上月目录扫到（文件名+size 匹配）→ ready', () => {

@@ -60,9 +60,9 @@ WeFlow(本机)  ──拉取/SSE──▶  本系统(转发代理)  ──HTTPS 
 
 ---
 
-## 4. 请求体：信封 `{ event, data }`
+## 4. 请求体：信封 `{ event, sessionId, data, file? }`
 
-**⚠️ 当前请求体有三个顶层字段 `event`、`sessionId`、`data`，没有 `file` 字段。**（旧规格书的 `{event, data, file}` 中的 `file` 属媒体链路，本期未启用，见 §11。）
+**媒体链路已启用（2026-07-16 起）**：媒体消息在信封顶层携带 `file` 字段，引用 `uploadMedia` 返回的 `file_id`（两步式，见《v2-weflow-媒体上传(uploadMedia)接口对接文档.md》§8）；文本/撤回消息无 `file` 字段。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -70,6 +70,7 @@ WeFlow(本机)  ──拉取/SSE──▶  本系统(转发代理)  ──HTTPS 
 | `sessionId` | string | 是 | **消息所属群/会话 ID（`xxx@chatroom`）**。下游据此把消息归到对应群，见 §4.3 |
 | `sender` | object | 否 | **发送人身份**（信封层补充元数据，非 `data` 内字段）：`{ username, name, avatar }`，见 §4.6 |
 | `data` | object | 是 | **WeFlow 单条原始消息对象，原样透传**（本系统不增删字段），结构见 §4.2 |
+| `file` | object \| array | 否 | **媒体引用**（仅媒体消息携带）：单对象 `{file_id, url?}` 或数组，每项必含 `file_id`（`uploadMedia` 返回值）。`file_id` 查不到时整条消息返回 `1003` 不可重试。下游落库以 `file_id` 反查媒体元数据为准，`url` 等其余字段可带可不带 |
 
 ### 4.1 `event` 取值
 
@@ -95,7 +96,7 @@ WeFlow(本机)  ──拉取/SSE──▶  本系统(转发代理)  ──HTTPS 
 | `content` | string | 消息显示文本 |
 | `rawContent` | string | 原始内容（可能存在） |
 | `parsedContent` | string | 解析后内容（可能存在） |
-| `mediaType` / `mediaFileName` / `mediaUrl` / `mediaLocalPath` | string | 媒体相关字段。**本期媒体消息不经本接口转发（见 §5），故正常不会出现**；即便出现，`mediaUrl`/`mediaLocalPath` 也是 WeFlow 本机地址，**远端不可达**，下游不应依赖 |
+| `mediaType` / `mediaFileName` / `mediaUrl` / `mediaLocalPath` | string | 媒体相关字段（WeFlow 原文，可能随媒体消息透传）。**下游不应依赖**：`mediaUrl`/`mediaLocalPath` 是 WeFlow 本机地址、远端不可达；媒体引用一律以**顶层 `file` 字段的 `file_id`** 为准（媒体本体已经 `uploadMedia` 先行上传） |
 
 > **除上表字段外，WeFlow 返回的其它字段也会一并透传**（本系统不裁剪），下游应对未知字段保持宽容。
 
@@ -167,7 +168,7 @@ WeFlow(本机)  ──拉取/SSE──▶  本系统(转发代理)  ──HTTPS 
 |---------|-----------------|------|
 | 放行群的**文本**新消息 | ✅ 是 | `event=message.new` |
 | 放行群的**撤回**事件 | ✅ 是 | `event=message.revoke` |
-| 放行群的**媒体**消息（图片/语音/视频/表情/文件） | ❌ **本期不推送** | 本系统队列中保留为 pending，待二期媒体链路上线后补发；下游本期不会收到媒体 |
+| 放行群的**媒体**消息（图片/语音/视频/表情/文件） | ✅ **已启用（两步式）** | 先 `uploadMedia` 上传媒体本体换 `file_id`，再经本接口推送、信封顶层带 `file` 引用（见 §4）；此前保留为 pending 的媒体可补发 |
 | **未放行群**的任何消息 | ❌ 永不推送 | 由 `syncGroups` 放行闸门在推送前拦截 |
 | 非群会话（单聊等） | ❌ 不推送 | 本期仅转发群聊 |
 
@@ -290,8 +291,8 @@ curl -X POST \
 
 | 项 | 旧规格书 | 当前实现（本文） |
 |----|---------|-----------------|
-| 顶层字段 | `{ event, data, file }` | **`{ event, sessionId, data }`**，无 `file`（媒体链路二期） |
-| 媒体消息 | 两步式（先 `uploadMedia` 拿 `file_id`，消息体引用 `file`） | **本期不转发媒体消息**，媒体链路（含 `uploadMedia`/`file`）二期再上 |
+| 顶层字段 | `{ event, data, file }` | **`{ event, sessionId, data, file? }`**（`file` 仅媒体消息携带，2026-07-16 起启用） |
+| 媒体消息 | 两步式（先 `uploadMedia` 拿 `file_id`，消息体引用 `file`） | **已启用两步式**：先 `uploadMedia` 拿 `file_id`，再在信封顶层 `file` 引用（见 §4） |
 | `data` 字段样例 | `rawid` / `timestamp` / `sessionId` / `sourceName` 等理想化字段 | **WeFlow 原始消息原样透传**：`serverId` / `createTime` / `senderUsername` / `content` 等（无 `rawid`/`sourceName`） |
 | 去重键 | `event + data.rawid` | **`event + data.serverId`**（回退 `localId`）——`rawid` 即对应 `serverId` |
 | 群标识 | 曾示意 `data.sessionId`（在 `data` 内） | **顶层 `sessionId`**（信封层，独立于 `data`），见 §4.3 |
@@ -306,6 +307,7 @@ curl -X POST \
 - [ ] 展示发言人时用顶层 `sender.name`/`sender.avatar`（可能为 `null`，需兜底占位），见 §4.6
 - [ ] 落库前按 §9 用 `event + data.serverId`（回退 `localId`）做幂等去重；重复返回 `code=1 + data.duplicate=true`
 - [ ] 处理 `event=message.new`（新消息）与 `event=message.revoke`（撤回）两类
+- [ ] 媒体消息：校验顶层 `file` 引用的每个 `file_id` 已存在（`uploadMedia` 落过），查不到返回 `1003` 不可重试；有效则把媒体挂到消息（url/类型细分等属下游业务）
 - [ ] 成功统一返回 **HTTP 200 + `code=1`**；失败返回对应错误码（`1001`/`1002`/`1003`/`1004`/`1005`）并在 `data.retryable` 给重试建议（§8）
 - [ ] 对 `data` 的未知/多余字段保持宽容，不因多字段报错
 - [ ] `createTime` 单位按 WeFlow 实际返回（疑似毫秒）自行归一，见 §4.2
@@ -319,7 +321,7 @@ curl -X POST \
 | Base URL / 站点 key / AES 密钥 | 由下游线下安全交付（与 `syncGroups` 共用同一套鉴权） |
 | `createTime` 单位 | 需确认 WeFlow 返回是秒还是毫秒（其 API 文档示例为 13 位毫秒），双方对齐归一口径 |
 | 撤回落库行为 | `message.revoke` 的 `data` 为 WeFlow 侧撤回后的行；下游如何据 `serverId` 关联并标记原消息为撤回，属下游业务 |
-| 媒体（二期） | 媒体消息经何种方式送达（两步式上传 `uploadMedia` + `file` 引用，或其它），二期启动前再定 |
+| ~~媒体（二期）~~ | ✅ 已定并启用（2026-07-16）：两步式上传 `uploadMedia` + 信封顶层 `file` 引用，见 §4 与 uploadMedia 文档 §8。遗留确认项（多媒体形态实际发送、`mediaType` 取值表）见 uploadMedia 文档 §12 |
 | `data.localType` 取值 | 如需按 WeFlow 消息类型码精确分流，双方对齐 `localType` 到业务类型的映射表 |
 
 ---
@@ -331,3 +333,4 @@ curl -X POST \
 | v1.0 | 2026-07-06 | 按当前代码实现重写：信封收敛为 `{event,data}`（无 `file`）、`data` 为 WeFlow 原始消息透传、明确本期只转发文本/撤回、ACK 判定与错误码→重试/死信/熔断决策、去重键改为 `event+serverId`、标注群标识缺失等待确认项 |
 | v1.1 | 2026-07-06 | 信封新增顶层 `sessionId`（`xxx@chatroom`）承载群标识，下游据此关联消息到群；`data` 仍为 WeFlow 原文（§4.3）。同步更新示例/差异表/实现清单 |
 | v1.2 | 2026-07-06 | 信封新增顶层 `sender`（发送人 `username/name/avatar`，来源 WeFlow ChatLab members，可为 `null`），下游据此展示发言人名字+头像；`data` 仍原样透传（§4.6）。同步更新字段表/示例 |
+| v1.3 | 2026-07-16 | **媒体链路二期启用**：信封新增顶层 `file` 字段（单对象或数组，每项含 `file_id`，引用 `uploadMedia` 返回值），媒体消息开始经本接口转发（§4/§5）；`file_id` 无效返回 `1003` 不可重试。下游已实现媒体落库关联（消息挂 url/类型细分 + 媒体归属回填）。文本/撤回消息报文与行为不变 |

@@ -118,7 +118,7 @@
             </ElTableColumn>
             <ElTableColumn
                 label="操作"
-                width="180"
+                width="240"
                 fixed="right"
             >
                 <template #default="{ row }">
@@ -129,6 +129,13 @@
                         @click="onViewMessages(row as WeflowGroup)"
                     >
                         查看消息
+                    </ElButton>
+                    <ElButton
+                        link
+                        size="small"
+                        @click="onOpenRawApi(row as WeflowGroup)"
+                    >
+                        原接口
                     </ElButton>
                     <ElButton
                         link
@@ -150,7 +157,8 @@ import { ApiError } from '@/api/http'
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchGroups, syncGroupsNow, resetGroup, resetAllGroups } from '@/api/groups'
-import { type WeflowGroup } from '@wb/shared/types'
+import { fetchConfig } from '@/api/config'
+import { type WeflowGroup, type WeflowConfig } from '@wb/shared/types'
 import { ElCard, ElTable, ElTableColumn, ElInput, ElSelect, ElOption, ElButton, ElTag, ElTooltip, ElMessage, ElMessageBox } from 'element-plus'
 
 type AllowedFilter = 'all' | 'allowed' | 'blocked'
@@ -168,6 +176,8 @@ const allowedFilter = ref<AllowedFilter>('allowed')
 const resettingId = ref<string | null>(null)
 /** 全部清空重拉进行中 */
 const resettingAll = ref(false)
+/** WeFlow 配置（挂载时预取，供「原接口」同步拼 URL，避免异步 window.open 被拦截弹窗） */
+const weflowCfg = ref<WeflowConfig | null>(null)
 
 /** 群名 + 放行状态的客户端筛选（数据量小，全量取回后本地过滤） */
 const filtered = computed(() => {
@@ -218,6 +228,26 @@ function onViewMessages(row: WeflowGroup): void {
     router.push({ name: 'weflow-messages', query: { conversationId: row.conversationId } })
 }
 
+/** 新标签页打开该群的 WeFlow 原始消息接口（调试用） */
+function onOpenRawApi(row: WeflowGroup): void {
+    const w = weflowCfg.value
+    if (!w) {
+        ElMessage.error('WeFlow 配置未加载，无法打开原接口')
+        return
+    }
+    const params = new URLSearchParams({
+        talker: row.conversationId,
+        access_token: w.accessToken,
+        limit: '100',
+        media: '1',
+        image: '1',
+        voice: '1',
+        video: '1',
+        emoji: '1',
+    })
+    window.open(`http://${w.host}:${w.port}/api/v1/messages?${params.toString()}`, '_blank')
+}
+
 /** 单群清空重拉（开发/测试）：二次确认 → 清该群 queue+dedup → 从 0 重拉。取消不触发。 */
 function onResetGroup(row: WeflowGroup): void {
     const name = row.groupName ?? row.conversationId
@@ -258,7 +288,13 @@ function onResetAll(): void {
         .catch((e) => { if (e instanceof ApiError) ElMessage.error(e.message) })
 }
 
-onMounted(load)
+onMounted(() => {
+    load()
+    // 预取 WeFlow 配置；失败不打扰（点「原接口」时再提示）
+    fetchConfig()
+        .then((c) => { weflowCfg.value = c.weflow ?? null })
+        .catch(() => { /* 忽略，点击时兜底提示 */ })
+})
 </script>
 
 <style scoped lang="scss">

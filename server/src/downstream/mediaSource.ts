@@ -21,11 +21,19 @@ export function fileMonthFolder(createTimeSec: number): string {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
+/** 剥掉 XML 文本节点的 <![CDATA[...]]> 包装（线上 appmsg 的 title/totallen 均为 CDATA 形态） */
+function unwrapCdata(s: string): string {
+    const m = /^<!\[CDATA\[([\s\S]*)\]\]>$/.exec(s.trim())
+    return (m ? m[1] : s).trim()
+}
+
 /** 从文件 appmsg 的 rawContent 解析 <title>（文件名，含扩展名）与 <totallen>（最终字节数） */
 function parseFileMeta(raw: string): { title: string | null, totalLen: number | null } {
-    const title = /<title>([\s\S]*?)<\/title>/.exec(raw)?.[1]?.trim() || null
-    const lenStr = /<totallen>(\d+)<\/totallen>/.exec(raw)?.[1]
-    return { title, totalLen: lenStr ? Number(lenStr) : null }
+    const rawTitle = /<title>([\s\S]*?)<\/title>/.exec(raw)?.[1]
+    const title = rawTitle ? unwrapCdata(rawTitle) || null : null
+    const rawLen = /<totallen>([\s\S]*?)<\/totallen>/.exec(raw)?.[1]
+    const lenStr = rawLen ? unwrapCdata(rawLen) : ''
+    return { title, totalLen: /^\d+$/.test(lenStr) ? Number(lenStr) : null }
 }
 
 /** 文件是否已完整落盘：有 totalLen 则精确匹配字节数，无则退化为 size>0 */
